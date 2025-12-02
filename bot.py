@@ -95,29 +95,30 @@ async def stat_img(msg: Message):
 # -------------------- ADD EXPENSE --------------------
 @dp.message(F.text)
 async def exp(msg: Message):
-    lang = await get_lang(msg.from_user.id)
     parsed = parse_expense(msg.text)
 
     if not parsed:
-        await msg.answer(LANG[lang]["bad_amount"])
+        await msg.answer("⚠️ Error: amount missing")
         return
 
-    title, amt, category_key = parsed
-    lang = await get_lang(msg.from_user.id)
-    category = CATEGORY_LABELS[category_key][lang]
+    title, amt, category_key, lang_detected = parsed
+
+    category = CATEGORY_LABELS.get(category_key, CATEGORY_LABELS["other"])[lang_detected]
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO transactions (user_id,title,category,amount_uzs)
+            INSERT INTO transactions (user_id, title, category, amount_uzs)
             VALUES ($1,$2,$3,$4)
-        """, msg.from_user.id, title, category, amt)
+        """, msg.from_user.id, title, category_key, amt)
 
-    await msg.answer(
-        f"🛡 {LANG[lang]['added']}\n"
-        f"{category} — <b>{amt:,} UZS</b>".replace(",", " ")
-    )
+    text = {
+        "ru": f"🛡 Расход записан\n{category} — <b>{amt:,} UZS</b>",
+        "uz": f"🛡 Xarajat yozildi\n{category} — <b>{amt:,} UZS</b>",
+        "en": f"🛡 Expense recorded\n{category} — <b>{amt:,} UZS</b>",
+    }[lang_detected].replace(",", " ")
 
+    await msg.answer(text)
 
 # -------------------- MAIN --------------------
 async def main():
