@@ -69,21 +69,27 @@ async def stat_img(msg: Message):
     await msg.answer_photo(file, caption=LANG[lang]["stat_title"])
 
 @dp.message(F.text)
+@dp.message(F.text)
 async def exp(msg: Message):
     lang = await get_lang(msg.from_user.id)
-    p = parse_expense(msg.text)
-    if not p:
+    parsed = parse_expense(msg.text)
+    if not parsed:
         await msg.answer(LANG[lang]["bad_amount"])
         return
-    title, amt = p
+    
+    title, amt, category = parsed
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("""
-        INSERT INTO transactions (user_id,title,amount_uzs)
-        VALUES ($1,$2,$3)
-        """, msg.from_user.id, title, amt)
-    await msg.answer(LANG[lang]["added"])
+        INSERT INTO transactions (user_id,title,category,amount_uzs)
+        VALUES ($1,$2,$3,$4)
+        """, msg.from_user.id, title, category, amt)
 
+    await msg.answer(
+        f"🛡 {LANG[lang]['added']}\n"
+        f"{category} — <b>{amt:,} UZS</b>".replace(",", " ")
+    )
 async def main():
     await init_db()
     await dp.start_polling(bot)
