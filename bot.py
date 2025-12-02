@@ -1,24 +1,31 @@
-# bot.py — PulKeeper v2.0 (full onboarding + balance + history)
+# bot.py — PulKeeper v3.0 (Onboarding + AI Parser + Drafts + Confirm Buttons)
+
 import asyncio
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 
+# Local imports
 from config import get_settings
 from db import get_pool, init_db
-from parser import parse_expense, CATEGORY_LABELS
-from stats import get_stats, category_chart
+from states import Onboarding
 from language import LANG
 from utils import lang_keyboard, balance_keyboard
-from states import Onboarding
+
+# AI + Draft + Keyboards
+from ai import analyze_message
+from draft import save_draft, get_draft, clear_draft
+from keyboards import draft_keyboard
+
+# Category labels (for history)
+from parser import CATEGORY_LABELS
 
 settings = get_settings()
 
@@ -27,109 +34,112 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# Dispatcher с in-memory storage для FSM
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# ---- helpers ----
-async def set_lang(user_id, lang):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET language=$1 WHERE id=$2",
-            lang, user_id,
-        )
-
+# ------------------------------------------------
+# HELPER FUNCTIONS
+# ------------------------------------------------
 
 async def get_lang(uid):
     pool = await get_pool()
     async with pool.acquire() as conn:
         lang = await conn.fetchval("SELECT language FROM users WHERE id=$1", uid)
-    return lang or "uz"
+        return lang or "ru"
 
 
-# -------------------- START / ONBOARDING --------------------
-@dp.message(CommandStart())
-async def start(msg: Message, state: FSMContext):
+async def set_lang(uid, lang):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        user = await conn.fetchrow("SELECT onboarding_step FROM users WHERE id=$1", msg.from_user.id)
+        await conn.execute("UPDATE users SET language=$1 WHERE id=$2", lang, uid)
+
+
+# ------------------------------------------------
+# START / ONBOARDING
+# ------------------------------------------------
+
+@dp.message(CommandStart())
+async def start(msg: Message, state: FSMContext):
+    uid = msg.from_user.id
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT onboarding_step FROM users WHERE id=$1", uid)
+
         if not user:
-            await conn.execute("INSERT INTO users (id) VALUES ($1) ON CONFLICT DO NOTHING", msg.from_user.id)
+            await conn.execute("INSERT INTO users (id) VALUES ($1)", uid)
             step = 0
         else:
-            step = user.get("onboarding_step", 0)
+            step = user['onboarding_step']
 
-    # Если онбординг уже пройден — покажем обычный welcome (по сохранённому языку)
+    # Онбординг завершён
     if step >= 3:
-        lang = await get_lang(msg.from_user.id)
+        lang = await get_lang(uid)
         await msg.answer(LANG[lang]["welcome"])
         return
 
-    # Начинаем онбординг: спрашиваем имя
+    # Шаг 1 — имя
     await msg.answer(
-        "Привет! Я PulKeeper 🛡\n\nЯ помогу вести учёт расходов и доходов.\n\nКак к тебе обращаться?"
+        "Привет! Я PulKeeper 🛡\n\nПомогу тебе вести учёт расходов.\n\nКак к тебе обращаться?"
     )
     await state.set_state(Onboarding.name)
 
 
-# Шаг 1 — получаем имя
 @dp.message(Onboarding.name)
-async def onboarding_name(msg: Message, state: FSMContext):
-    name = (msg.text or "").strip()
-    if not name:
-        await msg.answer("Напиши, пожалуйста, как к тебе обращаться.")
-        return
+async def get_name(msg: Message, state: FSMContext):
+    name = msg.text.strip()
+    uid = msg.from_user.id
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET name=$1, onboarding_step=1 WHERE id=$2",
-            name, msg.from_user.id
+            name, uid
         )
 
-    # Кнопка для отправки контакта (request_contact работает с ReplyKeyboardButton)
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Отправить номер", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
+        resize_keyboard=True
     )
 
-    await msg.answer(f"Отлично, {name}!\nТеперь отправь свой номер телефона.", reply_markup=kb)
+    await msg.answer(
+        f"Отлично, {name}!\nТеперь отправь свой номер телефона 👇",
+        reply_markup=kb
+    )
+
     await state.set_state(Onboarding.phone)
 
 
-# Шаг 2 — получаем телефон через контакт
 @dp.message(Onboarding.phone)
-async def onboarding_phone(msg: Message, state: FSMContext):
-    # Проверяем, пришёл ли контакт (Telegram)
-    if not msg.contact or not msg.contact.phone_number:
-        await msg.answer("Нажми кнопку и пришли контакт (кнопка сверху).")
+async def get_phone(msg: Message, state: FSMContext):
+    if not msg.contact:
+        await msg.answer("Пожалуйста, нажми кнопку и отправь номер.")
         return
 
     phone = msg.contact.phone_number
+    uid = msg.from_user.id
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET phone=$1, onboarding_step=2 WHERE id=$2",
-            phone, msg.from_user.id
+            phone, uid
         )
 
     await msg.answer(
-        "Последний вопрос:\nСколько денег у тебя сейчас в распоряжении?\n"
-        "(например: 500000)"
+        "Последний вопрос:\nСколько денег у тебя сейчас?\nНапример: 500000"
     )
+
     await state.set_state(Onboarding.balance)
 
 
-# Шаг 3 — стартовый капитал
 @dp.message(Onboarding.balance)
-async def onboarding_balance(msg: Message, state: FSMContext):
-    text = (msg.text or "").replace(" ", "")
+async def get_balance(msg: Message, state: FSMContext):
+    uid = msg.from_user.id
+
     try:
-        balance_val = float(text)
-    except Exception:
+        balance = float(msg.text.replace(" ", ""))
+    except:
         await msg.answer("Введите число, например: 500000")
         return
 
@@ -137,25 +147,112 @@ async def onboarding_balance(msg: Message, state: FSMContext):
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET balance=$1, onboarding_step=3 WHERE id=$2",
-            balance_val, msg.from_user.id
+            balance, uid
         )
 
     await state.clear()
 
-    await msg.answer(f"Принято! Записал {int(balance_val):,} UZS как стартовый капитал 💼".replace(",", " "))
     await msg.answer(
-        "🎙 Как отправлять голосовые сообщения:\n"
-        "1) Нажми и удерживай кнопку микрофона\n"
-        "2) Скажи расход: «Кофе пятнадцать тысяч» или «Такси 120000»\n"
-        "3) Отпусти для отправки\n\nПопробуй сейчас — отправь любой расход 👇"
+        f"Принято! Записал {int(balance):,} UZS как стартовый капитал 💼".replace(",", " ")
+    )
+
+    await msg.answer(
+        "🎙 Как отправлять голосовые:\n"
+        "1) Зажми микрофон\n"
+        "2) Скажи расход: «такси 120000»\n"
+        "3) Отпусти\n\n"
+        "Попробуй — отправь любой расход 👇"
     )
 
 
-# -------------------- STATISTICS TEXT --------------------
+# ------------------------------------------------
+# AI PARSER — MAIN HANDLER
+# ------------------------------------------------
+
+@dp.message(F.text)
+async def ai_handler(msg: Message):
+    if msg.text.startswith("/"):
+        return  # команды не трогаем
+
+    uid = msg.from_user.id
+
+    await msg.answer("📝 Обрабатываю сообщение...")
+
+    ai_data = await analyze_message(msg.text)
+
+    if not ai_data.get("valid"):
+        await msg.answer(f"⚠ Не понял сообщение: {ai_data.get('reason')}")
+        return
+
+    # Сохраняем черновик
+    save_draft(uid, ai_data)
+
+    text = (
+        "Новая транзакция\n"
+        f"💸 Сумма: <b>{ai_data['amount']:,} UZS</b>\n"
+        f"📂 Категория: {ai_data['category']}\n"
+        f"📝 Описание: {ai_data['title']}\n"
+        f"📅 Дата: {ai_data['date']}"
+    ).replace(",", " ")
+
+    await msg.answer(text, reply_markup=draft_keyboard())
+
+
+# ------------------------------------------------
+# DRAFT BUTTONS
+# ------------------------------------------------
+
+@dp.callback_query(F.data == "draft_accept")
+async def accept_draft(q: CallbackQuery):
+    uid = q.from_user.id
+    data = get_draft(uid)
+
+    if not data:
+        await q.answer("Черновик не найден!", show_alert=True)
+        return
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO transactions (user_id, title, category, amount_uzs)
+            VALUES ($1,$2,$3,$4)
+        """,
+        uid,
+        data["title"],
+        data["category"],
+        data["amount"]
+    )
+
+    clear_draft(uid)
+
+    await q.message.answer("✔ Транзакция добавлена!")
+    await q.answer()
+
+
+@dp.callback_query(F.data == "draft_decline")
+async def decline_draft(q: CallbackQuery):
+    clear_draft(q.from_user.id)
+    await q.message.answer("❌ Транзакция отменена.")
+    await q.answer()
+
+
+@dp.callback_query(F.data == "draft_edit")
+async def edit_draft(q: CallbackQuery):
+    await q.message.answer("✏ Введите исправленный текст:")
+    await q.answer()
+
+
+# ------------------------------------------------
+# STATS
+# ------------------------------------------------
+
+from stats import get_stats, category_chart
+
 @dp.message(Command("stat"))
 async def stat(msg: Message):
-    lang = await get_lang(msg.from_user.id)
-    t, w, m = await get_stats(msg.from_user.id)
+    uid = msg.from_user.id
+    lang = await get_lang(uid)
+    t, w, m = await get_stats(uid)
 
     text = (
         f"{LANG[lang]['stat_title']}\n\n"
@@ -167,11 +264,11 @@ async def stat(msg: Message):
     await msg.answer(text)
 
 
-# -------------------- STATISTICS IMAGE --------------------
 @dp.message(Command("stat_img"))
 async def stat_img(msg: Message):
-    lang = await get_lang(msg.from_user.id)
-    file = await category_chart(msg.from_user.id)
+    uid = msg.from_user.id
+    lang = await get_lang(uid)
+    file = await category_chart(uid)
 
     if not file:
         await msg.answer(LANG[lang]["no_data"])
@@ -180,18 +277,24 @@ async def stat_img(msg: Message):
     await msg.answer_photo(file, caption=LANG[lang]["stat_title"])
 
 
-# -------------------- BALANCE --------------------
+# ------------------------------------------------
+# BALANCE
+# ------------------------------------------------
+
 @dp.message(Command("balance"))
 async def balance_handler(msg: Message):
-    lang = await get_lang(msg.from_user.id)
+    uid = msg.from_user.id
+    lang = await get_lang(uid)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # берём стартовый баланс из users и суммируем расходы
-        start_balance = await conn.fetchval("SELECT COALESCE(balance,0) FROM users WHERE id=$1", msg.from_user.id)
+        start_balance = await conn.fetchval(
+            "SELECT COALESCE(balance,0) FROM users WHERE id=$1",
+            uid
+        )
         total_spent = await conn.fetchval(
-            "SELECT COALESCE(SUM(amount_uzs), 0) FROM transactions WHERE user_id = $1",
-            msg.from_user.id,
+            "SELECT COALESCE(SUM(amount_uzs),0) FROM transactions WHERE user_id=$1",
+            uid
         )
 
     current = float(start_balance) - float(total_spent)
@@ -201,109 +304,50 @@ async def balance_handler(msg: Message):
         f"{int(current):,} UZS"
     ).replace(",", " ")
 
-    # Респонсивная inline-кнопка для истории
     await msg.answer(text, reply_markup=balance_keyboard(lang))
 
 
-# -------------------- HISTORY --------------------
-async def get_last_transactions(user_id: int, limit: int = 20):
+# ------------------------------------------------
+# HISTORY
+# ------------------------------------------------
+
+async def get_last_transactions(uid, limit=20):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
+        return await conn.fetch("""
             SELECT title, category, amount_uzs, created_at
             FROM transactions
-            WHERE user_id = $1
+            WHERE user_id=$1
             ORDER BY created_at DESC
             LIMIT $2
-            """,
-            user_id,
-            limit,
-        )
-    return rows
+        """, uid, limit)
 
 
 @dp.message(Command("history"))
-async def history_command(msg: Message):
-    await send_history(msg.from_user.id, msg)
+async def history(msg: Message):
+    uid = msg.from_user.id
+    lang = await get_lang(uid)
 
-
-@dp.callback_query(F.data == "history")
-async def history_callback(q: CallbackQuery):
-    await send_history(q.from_user.id, q.message)
-    await q.answer()
-
-
-async def send_history(user_id: int, target_message):
-    lang = await get_lang(user_id)
-    rows = await get_last_transactions(user_id)
-
+    rows = await get_last_transactions(uid)
     if not rows:
-        await target_message.answer(LANG[lang]["history_empty"])
+        await msg.answer(LANG[lang]["history_empty"])
         return
 
     lines = [LANG[lang]["history_title"]]
-    for row in rows:
-        title = row["title"] or ""
-        category_key = row["category"]
-        # переводим ключ категории в метку на нужном языке
-        category_label = CATEGORY_LABELS.get(category_key, CATEGORY_LABELS["other"])[lang]
-        amount = int(row["amount_uzs"])
-        dt: datetime = row["created_at"]
-        date_str = dt.strftime("%Y-%m-%d")
 
-        line = f"{date_str} · {category_label} — {amount:,} UZS"
+    for row in rows:
+        date_str = row["created_at"].strftime("%Y-%m-%d")
+        category_label = CATEGORY_LABELS.get(row["category"], CATEGORY_LABELS["other"])[lang]
+        line = f"{date_str} · {category_label} — {int(row['amount_uzs']):,} UZS"
         lines.append(line.replace(",", " "))
 
-    await target_message.answer("\n".join(lines))
+    await msg.answer("\n".join(lines))
 
 
-# -------------------- ADD EXPENSE --------------------
-@dp.message(F.text)
-async def exp(msg: Message):
-    # Пропускаем обработку системных команд
-    if msg.text and msg.text.startswith("/"):
-        return
+# ------------------------------------------------
+# MAIN
+# ------------------------------------------------
 
-    parsed = parse_expense(msg.text or "")
-    if not parsed:
-        # используем язык пользователя для сообщения об ошибке
-        lang = await get_lang(msg.from_user.id)
-        await msg.answer(LANG[lang]["bad_amount"])
-        return
-
-    # parse_expense возвращает: title, amount, category_key, lang_detected
-    title, amt, category_key, lang_detected = parsed
-
-    # но для отображения используем выбранный пользователем язык из БД
-    user_lang = await get_lang(msg.from_user.id)
-    category_label = CATEGORY_LABELS.get(category_key, CATEGORY_LABELS["other"])[user_lang]
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO transactions (user_id, title, category, amount_uzs)
-            VALUES ($1,$2,$3,$4)
-        """, msg.from_user.id, title, category_key, amt)
-
-        # Обновляем баланс в users (вариант A: храним текущий баланс)
-        # Баланс в users хранится как стартовый капитал, поэтому уменьшаем его
-        await conn.execute(
-            "UPDATE users SET balance = COALESCE(balance,0) - $1 WHERE id=$2",
-            amt, msg.from_user.id
-        )
-
-    # Формируем сообщение на языке пользователя
-    text_map = {
-        "ru": f"🛡 Расход записан\n{category_label} — <b>{amt:,} UZS</b>",
-        "uz": f"🛡 Xarajat yozildi\n{category_label} — <b>{amt:,} UZS</b>",
-        "en": f"🛡 Expense recorded\n{category_label} — <b>{amt:,} UZS</b>",
-    }
-    msg_text = text_map.get(user_lang, text_map["uz"]).replace(",", " ")
-    await msg.answer(msg_text)
-
-
-# -------------------- MAIN --------------------
 async def main():
     await init_db()
     await dp.start_polling(bot)
