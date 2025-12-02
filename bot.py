@@ -11,6 +11,7 @@ from parser import parse_expense
 from stats import get_stats, category_chart
 from language import LANG
 from utils import lang_keyboard
+from parser import CATEGORY_LABELS
 
 
 settings = get_settings()
@@ -101,7 +102,9 @@ async def exp(msg: Message):
         await msg.answer(LANG[lang]["bad_amount"])
         return
 
-    title, amt, category = parsed
+    title, amt, category_key = parsed
+    lang = await get_lang(msg.from_user.id)
+    category = CATEGORY_LABELS[category_key][lang]
 
     pool = await get_pool()
     async with pool.acquire() as conn:
