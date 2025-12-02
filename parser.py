@@ -1,39 +1,51 @@
 import re
 from typing import Optional, Tuple
 
-
 CATEGORY_PATTERNS = {
-    "food": ["obid", "obed", "ovqat", "choy", "kofe", "kafe", "coffee", "eat", "food", "pizza", "non", "pitsa"],
-    "transport": ["taksi", "taxi", "avtobus", "bus", "metro", "benzin", "gaz", "yoqilgi"],
-    "shopping": ["market", "magazin", "xarid", "shop", "supermarket", "olmoq"],
-    "home": ["uy", "svet", "arenda", "rent", "kommunal", "kvartira", "dom"],
-    "health": ["dori", "apteka", "doctor", "lekar", "med", "apteka"],
-    "fun": ["kino", "film", "movie", "game", "oyin", "park"],
-    "services": ["xizmat", "service", "remont", "moyka", "repair"],
+    "food": {
+        "en": ["food", "eat", "meal", "lunch", "dinner", "coffee"],
+        "ru": ["еда", "обед", "ужин", "завтрак", "кофе"],
+        "uz": ["ovqat", "obid", "taom", "choy", "kofe"],
+    },
+    "transport": {
+        "en": ["taxi", "bus", "metro"],
+        "ru": ["такси", "автобус", "метро", "бензин"],
+        "uz": ["taksi", "avtobus", "metro", "benzin"],
+    },
+    "shopping": {
+        "en": ["market", "shop"],
+        "ru": ["покупка", "магазин"],
+        "uz": ["xarid", "bozor", "market"],
+    },
 }
-
 
 CATEGORY_LABELS = {
-    "food": {"uz": "🍽 Ovqat", "ru": "🍽 Еда"},
-    "transport": {"uz": "🚕 Transport", "ru": "🚕 Транспорт"},
-    "shopping": {"uz": "🛍 Xarid", "ru": "🛍 Покупки"},
-    "home": {"uz": "🏠 Uy", "ru": "🏠 Дом"},
-    "health": {"uz": "🏥 Sog'liq", "ru": "🏥 Здоровье"},
-    "fun": {"uz": "🎬 Ko'ngilochar", "ru": "🎬 Развлечения"},
-    "services": {"uz": "🛠 Xizmat", "ru": "🛠 Услуги"},
-    "other": {"uz": "❓ Boshqa", "ru": "❓ Другое"},
+    "food": {"uz": "🍽 Ovqat", "ru": "🍽 Еда", "en": "🍽 Food"},
+    "transport": {"uz": "🚕 Transport", "ru": "🚕 Транспорт", "en": "🚕 Transport"},
+    "shopping": {"uz": "🛍 Xarid", "ru": "🛍 Покупки", "en": "🛍 Shopping"},
+    "other": {"uz": "❓ Boshqa", "ru": "❓ Другое", "en": "❓ Other"},
 }
 
 
-def detect_category(text: str):
+def detect_language(text: str) -> str:
+    if re.search(r'[а-яА-Я]', text):
+        return "ru"
+    if re.search(r'[a-zA-Z]', text):
+        return "en"
+    return "uz"
+
+
+def detect_category(text: str, lang: str) -> str:
     lower = text.lower()
-    for key, words in CATEGORY_PATTERNS.items():
-        if any(w in lower for w in words):
+    for key, langs in CATEGORY_PATTERNS.items():
+        if lang in langs and any(w in lower for w in langs[lang]):
             return key
     return "other"
 
 
-def parse_expense(text: str) -> Optional[Tuple[str, int, str]]:
+def parse_expense(text: str) -> Optional[Tuple[str, int, str, str]]:
+    lang = detect_language(text)
+
     match = re.search(r'(\d[\d\s]*)', text)
     if not match:
         return None
@@ -41,10 +53,10 @@ def parse_expense(text: str) -> Optional[Tuple[str, int, str]]:
     amount_str = match.group(1).replace(" ", "")
     try:
         amount = int(amount_str)
-    except ValueError:
+    except:
         return None
 
-    title = text.replace(match.group(1), "").strip() or "Xarajat"
-    category_key = detect_category(title)
+    title = text.replace(match.group(1), "").strip() or "expense"
+    category_key = detect_category(title, lang)
 
-    return title, amount, category_key
+    return title, amount, category_key, lang
