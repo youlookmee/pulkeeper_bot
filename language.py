@@ -11,6 +11,9 @@ LANG = {
         "choose_lang": "🇺🇿 Tilni tanlang / 🇷🇺 Выберите язык",
         "uzbek": "🇺🇿 O‘zbekcha",
         "russian": "🇷🇺 Русский",
+        "balance_title": "Balans",
+        "history_title": "🧾 So'nggi xarajatlar",
+        "history_empty": "Hozircha xarajatlar tarixi yo'q.",
     },
     "ru": {
         "welcome": "Привет! PulKeeper 🛡️\n\nВведите расход:\nНапример: <code>такси 18000</code>",
@@ -24,6 +27,9 @@ LANG = {
         "choose_lang": "🇺🇿 Tilni tanlang / 🇷🇺 Выберите язык",
         "uzbek": "🇺🇿 O‘zbekcha",
         "russian": "🇷🇺 Русский",
+        "balance_title": "Баланс",
+        "history_title": "🧾 Последние расходы",
+        "history_empty": "История расходов пока пуста.",
     },
     "en": {
         "welcome": "Welcome to PulKeeper 🛡️\n\nEnter expense:\nExample: <code>food 25000</code>",
@@ -34,5 +40,8 @@ LANG = {
         "today": "Today",
         "week": "7 days",
         "month": "Month",
+        "balance_title": "Balance",
+        "history_title": "🧾 Recent expenses",
+        "history_empty": "No expense history yet.",
     }
 }
