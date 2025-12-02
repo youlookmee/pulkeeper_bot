@@ -10,9 +10,9 @@ from db import get_pool, init_db
 from parser import parse_expense
 from stats import get_stats, category_chart
 from language import LANG
-from utils import lang_keyboard
+from utils import lang_keyboard, balance_keyboard
 from parser import CATEGORY_LABELS
-
+from datetime import datetime
 
 settings = get_settings()
 
@@ -78,7 +78,6 @@ async def stat(msg: Message):
 
     await msg.answer(text)
 
-
 # -------------------- STATISTICS IMAGE --------------------
 @dp.message(Command("stat_img"))
 async def stat_img(msg: Message):
@@ -91,6 +90,83 @@ async def stat_img(msg: Message):
 
     await msg.answer_photo(file, caption=LANG[lang]["stat_title"])
 
+# -------------------- BALANCE --------------------
+@dp.message(Command("balance"))
+async def balance_handler(msg: Message):
+    lang = await get_lang(msg.from_user.id)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total_spent = await conn.fetchval(
+            """
+            SELECT COALESCE(SUM(amount_uzs), 0)
+            FROM transactions
+            WHERE user_id = $1
+            """,
+            msg.from_user.id,
+        )
+
+    # Здесь пока баланс = просто суммарные расходы (без стартового капитала)
+    # Позже можно сделать: баланс = стартовый_баланс - total_spent
+
+    text = (
+        f"{LANG[lang]['balance_title']}:\n"
+        f"{int(total_spent):,} UZS"
+    ).replace(",", " ")
+
+    await msg.answer(text, reply_markup=balance_keyboard(lang))
+
+# -------------------- HISTORY --------------------
+async def get_last_transactions(user_id: int, limit: int = 20):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT title, category, amount_uzs, created_at
+            FROM transactions
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+        )
+    return rows
+
+@dp.message(Command("history"))
+async def history_command(msg: Message):
+    await send_history(msg.from_user.id, msg)
+
+@dp.callback_query(F.data == "history")
+async def history_callback(q: CallbackQuery):
+    await send_history(q.from_user.id, q.message)
+    await q.answer()
+
+async def send_history(user_id: int, target_message: Message):
+    lang = await get_lang(user_id)
+    rows = await get_last_transactions(user_id)
+
+    if not rows:
+        await target_message.answer(LANG[lang]["history_empty"])
+        return
+
+    lines = [LANG[lang]["history_title"]]
+    for row in rows:
+        title = row["title"]
+        category = row["category"] or ""
+        amount = int(row["amount_uzs"])
+        dt: datetime = row["created_at"]
+        date_str = dt.strftime("%Y-%m-%d")
+
+        # строка вида: 2025-12-02 · 🍽 Еда — 25 000 UZS
+        if category:
+            line = f"{date_str} · {category} — {amount:,} UZS"
+        else:
+            line = f"{date_str} · {title} — {amount:,} UZS"
+
+        lines.append(line.replace(",", " "))
+
+    await target_message.answer("\n".join(lines))
 
 # -------------------- ADD EXPENSE --------------------
 @dp.message(F.text)
