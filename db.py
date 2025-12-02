@@ -17,14 +17,18 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             language VARCHAR(5) DEFAULT 'uz',
-            created_at TIMESTAMP DEFAULT NOW()
+            name TEXT,
+            phone TEXT,
+            balance NUMERIC(18,2) DEFAULT 0,
+            onboarding_step INT DEFAULT 0
         );
+
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id),
+            user_id BIGINT,
             title TEXT,
             category TEXT,
-            amount_uzs NUMERIC(18,2) NOT NULL,
+            amount_uzs BIGINT,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
