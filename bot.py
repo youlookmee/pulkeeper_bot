@@ -11,7 +11,10 @@ from language import LANG
 from utils import lang_keyboard
 
 settings = get_settings()
-bot = Bot(settings.bot_token, parse_mode="HTML")
+bot = Bot(settings.bot_token)
+dp = Dispatcher()
+dp["parse_mode"] = "HTML"
+
 dp = Dispatcher()
 
 async def set_lang(user_id, lang):
