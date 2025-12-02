@@ -1,8 +1,8 @@
 LANG = {
     "uz": {
-        "welcome": "Salom! Men PulKeeper 🛡️\n\nXarajatlarni yozing:\nMasalan: <code>obid 25000</code>",
-        "added": "🛡️ Xarajat yozildi",
-        "bad_amount": "Summani topib bo‘lmadi.\nMasalan: <code>taksi 18000</code>",
+        "welcome": "Salom! PulKeeper 🛡️\n\nXarajat kiriting:\nMisol: <code>obid 25000</code>",
+        "added": "Xarajat yozildi",
+        "bad_amount": "Summani topib bo‘lmadi.\nMisol: <code>taksi 18000</code>",
         "no_data": "Hali statistik ma’lumot yo‘q 🤷‍♂️",
         "stat_title": "📊 Xarajatlar statistikasi",
         "today": "Bugun",
@@ -13,9 +13,9 @@ LANG = {
         "russian": "🇷🇺 Русский",
     },
     "ru": {
-        "welcome": "Привет! Это PulKeeper 🛡️\n\nОтправьте расход:\nНапример: <code>обед 25000</code>",
-        "added": "🛡️ Расход записан",
-        "bad_amount": "Не удалось определить сумму.\nПример: <code>такси 18000</code>",
+        "welcome": "Привет! PulKeeper 🛡️\n\nВведите расход:\nНапример: <code>такси 18000</code>",
+        "added": "Расход записан",
+        "bad_amount": "Не удалось определить сумму.\nПример: <code>обед 25000</code>",
         "no_data": "Статистики пока нет 🤷‍♂️",
         "stat_title": "📊 Статистика расходов",
         "today": "Сегодня",
@@ -24,5 +24,15 @@ LANG = {
         "choose_lang": "🇺🇿 Tilni tanlang / 🇷🇺 Выберите язык",
         "uzbek": "🇺🇿 O‘zbekcha",
         "russian": "🇷🇺 Русский",
+    },
+    "en": {
+        "welcome": "Welcome to PulKeeper 🛡️\n\nEnter expense:\nExample: <code>food 25000</code>",
+        "added": "Expense recorded",
+        "bad_amount": "Couldn't detect amount.\nExample: <code>food 25000</code>",
+        "no_data": "No stats yet 🤷‍♂️",
+        "stat_title": "📊 Expense statistics",
+        "today": "Today",
+        "week": "7 days",
+        "month": "Month",
     }
 }
