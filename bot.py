@@ -2,6 +2,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
+from aiogram.enums import ParseMode
 
 from config import get_settings
 from db import get_pool, init_db
@@ -11,7 +12,7 @@ from language import LANG
 from utils import lang_keyboard
 
 settings = get_settings()
-bot = Bot(settings.bot_token)
+bot = Bot(token=settings.bot_token, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 dp["parse_mode"] = "HTML"
 
