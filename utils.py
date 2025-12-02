@@ -7,3 +7,8 @@ def lang_keyboard():
         [InlineKeyboardButton(text=LANG["ru"]["russian"], callback_data="lang_ru")],
     ])
     return kb
+
+def balance_keyboard(lang: str):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=LANG[lang]["history_title"], callback_data="history")]
+    ])
