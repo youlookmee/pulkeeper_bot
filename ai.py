@@ -3,7 +3,8 @@ import os
 import json
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# New correct client initialization
+client = OpenAI()   # автоматически возьмёт OPENAI_API_KEY из окружения
 
 async def analyze_message(text: str):
     """
@@ -28,14 +29,6 @@ JSON format:
   "valid": true|false,
   "reason": string
 }}
-
-Rules:
-- If amount is missing → valid=false, reason="Amount missing".
-- If unclear → valid=false, reason="Unclear message".
-- Category examples: taxi, food, groceries, cafe, salary, other.
-- Date must be today's date automatically.
-- Extract numbers from text even if written in words (e.g. 'пятнадцать тысяч').
-- Do not include any text except pure JSON.
 """
 
     response = client.chat.completions.create(
@@ -49,7 +42,6 @@ Rules:
 
     raw = response.choices[0].message["content"]
 
-    # Parse model output
     try:
         data = json.loads(raw)
     except:
