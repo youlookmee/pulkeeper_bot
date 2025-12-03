@@ -27,32 +27,34 @@ async def download_voice(bot, file_id: str, dest: str) -> str:
 #                2) WHISPER → TEXT
 # ============================================================
 async def transcribe_voice(file_path: str) -> str | None:
-    """
-    Отправляет файл в OpenAI Whisper и получает текст.
-    Возвращает None если ошибка.
-    """
-
-    headers = {"Authorization": f"Bearer {WHISPER_API_KEY}"}
-
-    data = aiohttp.FormData()
-    data.add_field("model", "whisper-1")
-    data.add_field("file", open(file_path, "rb"), filename="voice.ogg")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(WHISPER_URL, headers=headers, data=data) as resp:
-                result = await resp.json()
-
-                if "text" in result:
-                    return result["text"]
-
-                print("❗ Whisper error:", result)
-                return None
-
-    except Exception as e:
-        print("❗ Whisper exception:", e)
+    if not WHISPER_API_KEY:
+        print("WHISPER_API_KEY not found")
         return None
 
+    try:
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        form = aiohttp.FormData()
+        form.add_field("model", "whisper-1")
+        form.add_field("file", file_bytes,
+                       filename="audio.ogg",
+                       content_type="audio/ogg")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {WHISPER_API_KEY}"},
+                data=form
+            ) as resp:
+                res = await resp.json()
+                print("WHISPER RESP:", res)
+
+                return res.get("text")
+
+    except Exception as e:
+        print("Whisper ERROR:", e)
+        return None
 
 # ============================================================
 #               3) DEEPSEEK MESSAGE ANALYSIS
