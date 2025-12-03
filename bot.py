@@ -276,7 +276,7 @@ async def voice_handler(msg: Message):
     file_id = msg.voice.file_id
     path = f"voice_{user_id}.ogg"
 
-    await download_voice(bot, file_id,  
+    await download_voice(bot, file_id, path)  
 
     text = await transcribe_voice(path)
     os.remove(path)
