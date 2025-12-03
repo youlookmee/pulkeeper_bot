@@ -1,20 +1,22 @@
 import asyncio
-import os
-from datetime import datetime
-
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from datetime import datetime
+import os
 
+# ==== OUR MODULES ====
 from config import get_settings
 from db import get_pool, init_db
 from parser import CATEGORY_LABELS
 from stats import get_stats, category_chart
-from language import LANG
 from utils import lang_keyboard, balance_keyboard
-from ai import analyze_message   # ← DeepSeek
+from language import LANG
+
+# AI functions
+from ai import analyze_message, transcribe_voice
 
 settings = get_settings()
 
@@ -26,56 +28,53 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# -------------------- LANGUAGE SYSTEM --------------------
-
-async def set_lang(uid, lang):
+# ===========================================
+# LANGUAGE HELPERS
+# ===========================================
+async def set_lang(user_id, lang):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET language=$1 WHERE id=$2",
-            lang, uid
-        )
+        await conn.execute("UPDATE users SET language=$1 WHERE id=$2", lang, user_id)
 
 
 async def get_lang(uid):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        lang = await conn.fetchval(
-            "SELECT language FROM users WHERE id=$1", uid
-        )
-    return lang or "uz"
+        lang = await conn.fetchval("SELECT language FROM users WHERE id=$1", uid)
+    return lang or "ru"
 
 
-# -------------------- /start --------------------
-
+# ===========================================
+# START
+# ===========================================
 @dp.message(CommandStart())
 async def start(msg: Message):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO users (id) VALUES ($1)
-            ON CONFLICT DO NOTHING
-        """, msg.from_user.id)
+        await conn.execute(
+            "INSERT INTO users (id) VALUES ($1) ON CONFLICT DO NOTHING",
+            msg.from_user.id,
+        )
 
     await msg.answer(
-        LANG["uz"]["choose_lang"],
+        LANG["ru"]["choose_lang"],
         reply_markup=lang_keyboard()
     )
 
 
-# -------------------- LANGUAGE SELECTION --------------------
-
+# ===========================================
+# LANGUAGE CHOOSE
+# ===========================================
 @dp.callback_query(F.data.startswith("lang_"))
 async def choose_lang(q: CallbackQuery):
     lang = q.data.split("_")[1]
     await set_lang(q.from_user.id, lang)
-
     await q.message.edit_text(LANG[lang]["welcome"])
-    await q.answer()
 
 
-# -------------------- STAT TEXT --------------------
-
+# ===========================================
+# STATISTICS (TEXT)
+# ===========================================
 @dp.message(Command("stat"))
 async def stat(msg: Message):
     lang = await get_lang(msg.from_user.id)
@@ -91,8 +90,9 @@ async def stat(msg: Message):
     await msg.answer(text)
 
 
-# -------------------- STAT IMAGE --------------------
-
+# ===========================================
+# STATISTICS IMAGE
+# ===========================================
 @dp.message(Command("stat_img"))
 async def stat_img(msg: Message):
     lang = await get_lang(msg.from_user.id)
@@ -105,46 +105,43 @@ async def stat_img(msg: Message):
     await msg.answer_photo(file, caption=LANG[lang]["stat_title"])
 
 
-# -------------------- BALANCE --------------------
-
+# ===========================================
+# BALANCE
+# ===========================================
 @dp.message(Command("balance"))
 async def balance_handler(msg: Message):
-    lang = await get_lang(msg.from_user.id)
+    user_id = msg.from_user.id
+    lang = await get_lang(user_id)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN is_income THEN amount_uzs END), 0) AS income,
-                COALESCE(SUM(CASE WHEN NOT is_income THEN amount_uzs END), 0) AS expense
-            FROM transactions
-            WHERE user_id = $1
-            """,
-            msg.from_user.id,
+        income = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount_uzs),0) FROM transactions WHERE user_id=$1 AND is_income=true",
+            user_id
+        )
+        expense = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount_uzs),0) FROM transactions WHERE user_id=$1 AND is_income=false",
+            user_id
         )
 
-    income = int(row["income"])
-    expense = int(row["expense"])
     balance = income - expense
 
     text = (
-        f"💰 Доходы: <b>{income:,} UZS</b>\n"
-        f"💸 Расходы: <b>{expense:,} UZS</b>\n"
-        f"📊 Баланс: <b>{balance:,} UZS</b>"
+        f"{LANG[lang]['balance_title']}:\n"
+        f"<b>{balance:,} UZS</b>"
     ).replace(",", " ")
 
-    await msg.answer(text)
+    await msg.answer(text, reply_markup=balance_keyboard(lang))
 
 
-
-# -------------------- HISTORY --------------------
-
+# ===========================================
+# HISTORY
+# ===========================================
 async def get_last_transactions(uid, limit=20):
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT title, category, amount_uzs, created_at
+            SELECT title, category, amount_uzs, created_at, is_income
             FROM transactions
             WHERE user_id=$1
             ORDER BY created_at DESC
@@ -154,17 +151,17 @@ async def get_last_transactions(uid, limit=20):
 
 
 @dp.message(Command("history"))
-async def history_command(msg: Message):
+async def history_cmd(msg: Message):
     await send_history(msg.from_user.id, msg)
 
 
 @dp.callback_query(F.data == "history")
-async def history_callback(q: CallbackQuery):
+async def history_cb(q: CallbackQuery):
     await send_history(q.from_user.id, q.message)
     await q.answer()
 
 
-async def send_history(uid: int, target):
+async def send_history(uid, target):
     lang = await get_lang(uid)
     rows = await get_last_transactions(uid)
 
@@ -174,67 +171,91 @@ async def send_history(uid: int, target):
 
     lines = [LANG[lang]["history_title"]]
 
-    for row in rows:
-        dt: datetime = row["created_at"]
-        date_str = dt.strftime("%Y-%m-%d")
-        amount = int(row["amount_uzs"])
-        category = row["category"]
-        title = row["title"]
+    for r in rows:
+        dt: datetime = r["created_at"]
+        date = dt.strftime("%Y-%m-%d")
+        amount = int(r["amount_uzs"])
+        category = r["category"]
+        income = r["is_income"]
 
-        if category:
-            line = f"{date_str} · {category} — {amount:,} UZS"
-        else:
-            line = f"{date_str} · {title} — {amount:,} UZS"
+        sign = "➕" if income else "➖"
+        emoji = "💰" if income else "📉"
 
-        lines.append(line.replace(",", " "))
+        lines.append(
+            f"{date} · {emoji} {category} — {amount:,} UZS"
+            .replace(",", " ")
+        )
 
     await target.answer("\n".join(lines))
 
 
-# -------------------- ADD EXPENSE (DeepSeek) --------------------
+# ===========================================
+# PROCESS TEXT MESSAGE (EXPENSE / INCOME)
+# ===========================================
+async def process_text(msg: Message, text: str):
+    parsed = await analyze_message(text)
 
-# -------------------- ADD EXPENSE / INCOME --------------------
-@dp.message(F.text)
-async def exp(msg: Message):
-    ai_data = await analyze_message(msg.text)
-
-    if not ai_data:
-        await msg.answer("⚠️ Я не смог понять сумму. Пример: такси 30000")
+    if not parsed:
+        await msg.answer("⚠️ Я не смог понять. Напишите сумму, пример:\nТакси 18000")
         return
 
-    title = ai_data.get("title")
-    amount = ai_data.get("amount")
-    category = ai_data.get("category")
-    is_income = ai_data.get("is_income", False)
+    title = parsed.get("title")
+    amount = parsed.get("amount")
+    category_key = parsed.get("category", "other")
+    op_type = parsed.get("type", "expense")
 
-    if not amount:
-        await msg.answer("⚠️ Я не смог определить сумму.")
-        return
+    is_income = (op_type == "income")
+
+    category = CATEGORY_LABELS.get(category_key, CATEGORY_LABELS["other"])["ru"]
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
+        await conn.execute("""
             INSERT INTO transactions (user_id, title, category, amount_uzs, is_income)
             VALUES ($1,$2,$3,$4,$5)
-            """,
-            msg.from_user.id,
-            title,
-            category,
-            amount,
-            is_income
-        )
+        """, msg.from_user.id, title, category, amount, is_income)
 
-    # Ответ пользователю
     if is_income:
-        text = f"💰 Доход записан\n<b>{title}</b> — <b>{amount:,} UZS</b>"
+        await msg.answer(f"💰 Доход записан\n{title} — <b>{amount:,} UZS</b>".replace(",", " "))
     else:
-        text = f"🧾 Расход записан\n<b>{title}</b> — <b>{amount:,} UZS</b>"
+        await msg.answer(f"📉 Расход записан\n{title} — <b>{amount:,} UZS</b>".replace(",", " "))
 
-    await msg.answer(text.replace(",", " "))
 
-# -------------------- MAIN --------------------
+# ===========================================
+# VOICE MESSAGES
+# ===========================================
+@dp.message(F.voice)
+async def voice_handler(msg: Message):
+    uid = msg.from_user.id
 
+    file_id = msg.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+
+    local_file = f"voice_{uid}.ogg"
+    await bot.download_file(file_path, local_file)
+
+    # Расшифровываем аудио
+    text = await transcribe_voice(local_file)
+
+    if not text:
+        await msg.answer("⚠️ Не удалось распознать голос. Попробуйте снова.")
+        return
+
+    await process_text(msg, text)
+
+
+# ===========================================
+# TEXT MESSAGES
+# ===========================================
+@dp.message(F.text)
+async def text_handler(msg: Message):
+    await process_text(msg, msg.text)
+
+
+# ===========================================
+# MAIN
+# ===========================================
 async def main():
     await init_db()
     await dp.start_polling(bot)
