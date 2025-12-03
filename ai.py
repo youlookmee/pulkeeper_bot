@@ -54,49 +54,45 @@ async def transcribe_voice(file_path: str) -> str | None:
 # ----------------------------------------------------------
 # 3) DeepSeek — разбор текста (если Whisper дал текст)
 # ----------------------------------------------------------
-async def analyze_message(text: str) -> dict | None:
+async def analyze_message(text: str):
     """
-    DeepSeek должен вернуть JSON:
+    Анализ текста/голоса через DeepSeek.
+    Возвращает JSON:
     {
-        "title": "...",
+        "title": "такси",
         "amount": 15000,
-        "category": "transport"
+        "category": "transport",
+        "is_income": false
     }
     """
 
-    # 🔥 Сначала пробуем вытащить сумму без ИИ (узбекский/русский)
-    quick = normalize_text_to_number(text)
-    if quick:
-        return {
-            "title": text,
-            "amount": quick,
-            "category": "other"
-        }
-
-    # ❗ Если бот не понял сумму — подключаем DeepSeek
     prompt = f"""
-Распознай финансовый запрос. Верни строго JSON:
+Ты ИИ-помощник для финансов.  
+Разбери текст и верни строго JSON.
 
-Пример корректного JSON:
-{{
-  "title": "такси",
-  "amount": 20000,
-  "category": "transport"
-}}
+Определи:
+- является ли операция доходом или расходом
+- сумму
+- название
+- категорию
 
-Категории:
-- transport
-- food
-- fun
-- other
-- income
+Правила:
+1. ДОХОД, если встречаются слова:
+   "получил", "зарплата", "зп", "плюс", "+", "добавь", "kelib tushdi", "keldi", "oylik", "maosh"
 
-Важно:
-• amount — только число
-• никакого текста вне JSON
+2. РАСХОД, если слова:
+   "потратил", "минус", "расход", "такси", "еда", "кафе", "avoqat", "chiqim"
+
+3. Верни JSON вида:
+{
+  "title": "...",
+  "amount": ЧИСЛО,
+  "category": "transport/food/other",
+  "is_income": true/false
+}
 
 Текст пользователя: "{text}"
-Верни только JSON:
+Ответь ТОЛЬКО JSON:
 """
 
     headers = {
@@ -106,22 +102,21 @@ async def analyze_message(text: str) -> dict | None:
 
     body = {
         "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
         "temperature": 0.1
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(DEEPSEEK_URL, headers=headers, json=body) as resp:
-                data = await resp.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.post(DEEPSEEK_URL, headers=headers, json=body) as resp:
+            data = await resp.json()
 
-                # print("RAW DeepSeek:", data)  # для дебага
-
+            try:
                 content = data["choices"][0]["message"]["content"]
                 content = content.replace("```json", "").replace("```", "").strip()
-
                 return json.loads(content)
 
-    except Exception as e:
-        print("DeepSeek parse error:", e)
-        return None
+            except Exception as e:
+                print("DeepSeek parse error:", e, "RAW:", data)
+                return None
