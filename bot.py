@@ -45,7 +45,7 @@ async def get_lang(uid):
 
 
 # ============================================================
-#                           START
+#                             START
 # ============================================================
 @dp.message(CommandStart())
 async def start(msg: Message):
@@ -63,7 +63,7 @@ async def start(msg: Message):
 
 
 # ============================================================
-#                     LANGUAGE BUTTON
+#                      LANGUAGE BUTTONS
 # ============================================================
 @dp.callback_query(F.data.startswith("lang_"))
 async def choose_lang(q: CallbackQuery):
@@ -74,7 +74,7 @@ async def choose_lang(q: CallbackQuery):
 
 
 # ============================================================
-#                           STAT
+#                             STAT
 # ============================================================
 @dp.message(Command("stat"))
 async def stat(msg: Message):
@@ -104,7 +104,7 @@ async def stat_img(msg: Message):
 
 
 # ============================================================
-#                      BALANCE
+#                             BALANCE
 # ============================================================
 @dp.message(Command("balance"))
 async def balance_handler(msg: Message):
@@ -133,19 +133,18 @@ async def balance_handler(msg: Message):
 
 
 # ============================================================
-#                       HISTORY
+#                             HISTORY
 # ============================================================
 async def get_last_transactions(user_id: int, limit: int = 20):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
+        return await conn.fetch("""
             SELECT title, category, amount_uzs, created_at, is_income
             FROM transactions
             WHERE user_id = $1
             ORDER BY created_at DESC
             LIMIT $2
         """, user_id, limit)
-    return rows
 
 
 @dp.message(Command("history"))
@@ -182,7 +181,7 @@ async def send_history(user_id: int, target_message: Message):
 
 
 # ============================================================
-#                     SAVE TRANSACTION
+#                    SAVE TRANSACTION
 # ============================================================
 async def save_transaction(user_id, title, amount, category, is_income):
     pool = await get_pool()
@@ -194,7 +193,7 @@ async def save_transaction(user_id, title, amount, category, is_income):
 
 
 # ============================================================
-#               MAIN EXPENSE/INCOME HANDLER
+#            MAIN TEXT/VOICE PROCESSING LOGIC
 # ============================================================
 async def process_text(msg: Message, text: str):
     user_id = msg.from_user.id
@@ -229,26 +228,36 @@ async def process_text(msg: Message, text: str):
         except:
             ai_amount = 0
 
-        # Fallback извлекаем сумму из текста
+        # fallback из текста
         extracted = normalize_text_to_number(text) or 0
 
-        # Самый надёжный вариант: берём максимум
         amount = max(ai_amount, extracted)
 
         if amount <= 0:
             await msg.answer(LANG[lang]["bad_format"])
             return
 
-        # Категория
         category = ai.get("category", "other")
         is_income = bool(ai.get("is_income", False))
 
         # ---------------------------------------
-        # 3) Дополнительная проверка ключевых слов
+        # 3) Умная проверка ключевых слов
         # ---------------------------------------
-        if any(w in original_text for w in ["плюс", "+", "получил", "oylik", "keldi", "kelib"]):
+        income_words = [
+            "плюс", "+", "получил", "зарплата", "зп", "з.п", "oylik",
+            "maosh", "keldi", "kelib", "kelib tushdi", "добавь",
+            "add", "qo'sh", "qosh", "qo‘sh"
+        ]
+
+        expense_words = [
+            "минус", "-", "расход", "потратил", "такси",
+            "еда", "chiqim", "avoqat"
+        ]
+
+        if any(w in original_text for w in income_words):
             is_income = True
-        if any(w in original_text for w in ["минус", "-", "расход", "chiqim", "такси", "еда"]):
+
+        if any(w in original_text for w in expense_words):
             is_income = False
 
     # ---------------------------------------
@@ -260,9 +269,10 @@ async def process_text(msg: Message, text: str):
     # 5) Ответ пользователю
     # ---------------------------------------
     icon = "💰" if is_income else "📄"
+    kind = "Доход" if is_income else "Расход"
+
     await msg.answer(
-        f"{icon} {'Доход' if is_income else 'Расход'} записан\n{title} — <b>{amount:,} UZS</b>"
-        .replace(",", " ")
+        f"{icon} {kind} записан\n{title} — <b>{amount:,} UZS</b>".replace(",", " ")
     )
 
 
@@ -276,16 +286,18 @@ async def voice_handler(msg: Message):
     file_id = msg.voice.file_id
     path = f"voice_{user_id}.ogg"
 
-    await download_voice(bot, file_id, path)  
+    await download_voice(bot, file_id, path)
 
     text = await transcribe_voice(path)
-    os.remove(path)
+
+    if os.path.exists(path):
+        os.remove(path)
 
     if not text:
         await msg.answer("❗ Не смог распознать голосовое сообщение.")
         return
 
-    await process_text(msg, text)
+        await process_text(msg, text)
 
 
 # ============================================================
@@ -306,3 +318,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
