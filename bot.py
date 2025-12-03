@@ -1,4 +1,7 @@
 import asyncio
+import os
+from datetime import datetime
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
@@ -12,8 +15,7 @@ from parser import parse_expense
 from stats import get_stats, category_chart
 from language import LANG
 from keyboards import lang_keyboard, balance_keyboard
-from datetime import datetime
-import os
+from utils_number import normalize_text_to_number
 
 
 settings = get_settings()
@@ -26,7 +28,9 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# -------------------- LANGUAGE STORAGE --------------------
+# ============================================================
+#                      LANGUAGE STORAGE
+# ============================================================
 async def set_lang(user_id, lang):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -40,7 +44,9 @@ async def get_lang(uid):
     return lang or "uz"
 
 
-# -------------------- START --------------------
+# ============================================================
+#                           START
+# ============================================================
 @dp.message(CommandStart())
 async def start(msg: Message):
     pool = await get_pool()
@@ -50,18 +56,26 @@ async def start(msg: Message):
             msg.from_user.id
         )
 
-    await msg.answer(LANG["uz"]["choose_lang"], reply_markup=lang_keyboard())
+    await msg.answer(
+        LANG["uz"]["choose_lang"],
+        reply_markup=lang_keyboard()
+    )
 
 
-# -------------------- LANGUAGE BUTTON --------------------
+# ============================================================
+#                     LANGUAGE BUTTON
+# ============================================================
 @dp.callback_query(F.data.startswith("lang_"))
 async def choose_lang(q: CallbackQuery):
     lang = q.data.split("_")[1]
     await set_lang(q.from_user.id, lang)
     await q.message.edit_text(LANG[lang]["welcome"])
+    await q.answer()
 
 
-# -------------------- STATISTICS TEXT --------------------
+# ============================================================
+#                           STAT
+# ============================================================
 @dp.message(Command("stat"))
 async def stat(msg: Message):
     lang = await get_lang(msg.from_user.id)
@@ -71,13 +85,12 @@ async def stat(msg: Message):
         f"{LANG[lang]['stat_title']}\n\n"
         f"{LANG[lang]['today']}: <b>{t:,} UZS</b>\n"
         f"{LANG[lang]['week']}: <b>{w:,} UZS</b>\n"
-        f"{LANG[lang]['month']}: <b>{m:,} UZS</b>\n"
+        f"{LANG[lang]['month']}: <b>{m:,} UZS</b>"
     ).replace(",", " ")
 
     await msg.answer(text)
 
 
-# -------------------- STAT IMAGE --------------------
 @dp.message(Command("stat_img"))
 async def stat_img(msg: Message):
     lang = await get_lang(msg.from_user.id)
@@ -90,7 +103,9 @@ async def stat_img(msg: Message):
     await msg.answer_photo(file, caption=LANG[lang]["stat_title"])
 
 
-# -------------------- BALANCE --------------------
+# ============================================================
+#                      BALANCE
+# ============================================================
 @dp.message(Command("balance"))
 async def balance_handler(msg: Message):
     lang = await get_lang(msg.from_user.id)
@@ -111,15 +126,15 @@ async def balance_handler(msg: Message):
 
     balance = total_income - total_spent
 
-    text = (
-        f"{LANG[lang]['balance_title']}:\n"
-        f"<b>{balance:,} UZS</b>"
-    ).replace(",", " ")
-
-    await msg.answer(text, reply_markup=balance_keyboard(lang))
+    await msg.answer(
+        f"{LANG[lang]['balance_title']}:\n<b>{balance:,} UZS</b>".replace(",", " "),
+        reply_markup=balance_keyboard(lang)
+    )
 
 
-# -------------------- HISTORY --------------------
+# ============================================================
+#                       HISTORY
+# ============================================================
 async def get_last_transactions(user_id: int, limit: int = 20):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -153,24 +168,22 @@ async def send_history(user_id: int, target_message: Message):
         return
 
     lines = [LANG[lang]["history_title"]]
-    for row in rows:
-        title = row["title"]
-        amount = int(row["amount_uzs"])
-        cat = row["category"]
-        dt: datetime = row["created_at"]
-        date_str = dt.strftime("%Y-%m-%d")
 
-        kind = "Доход" if row["is_income"] else "Расход"
+    for row in rows:
         icon = "💰" if row["is_income"] else "📄"
+        kind = "Доход" if row["is_income"] else "Расход"
 
         lines.append(
-            f"{icon} {kind} — {title} · {amount:,} UZS · {date_str}".replace(",", " ")
+            f"{icon} {kind} — {row['title']} · {row['amount_uzs']:,} UZS · {row['created_at'].strftime('%Y-%m-%d')}"
+            .replace(",", " ")
         )
 
     await target_message.answer("\n".join(lines))
 
 
-# -------------------- MAIN EXPENSE/INCOME HANDLER --------------------
+# ============================================================
+#                     SAVE TRANSACTION
+# ============================================================
 async def save_transaction(user_id, title, amount, category, is_income):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -180,73 +193,90 @@ async def save_transaction(user_id, title, amount, category, is_income):
         """, user_id, title, category, amount, is_income)
 
 
+# ============================================================
+#               MAIN EXPENSE/INCOME HANDLER
+# ============================================================
 async def process_text(msg: Message, text: str):
     user_id = msg.from_user.id
     lang = await get_lang(user_id)
+    original_text = text.lower()
 
-    # ------------------------------
+    # ---------------------------------------
     # 1) Локальный быстрый парсер
-    # ------------------------------
+    # ---------------------------------------
     parsed = parse_expense(text)
 
     if parsed:
-        # parse_expense вернул (title, amount, category, detected_lang)
         title, amount, category, _ = parsed
         is_income = (category == "income")
 
     else:
-        # ------------------------------
+        # ---------------------------------------
         # 2) DeepSeek-анализ
-        # ------------------------------
-        ai_data = await analyze_message(text)
+        # ---------------------------------------
+        ai = await analyze_message(text)
 
-        if not ai_data:
+        if not ai:
             await msg.answer(LANG[lang]["bad_format"])
             return
 
-        # Название операции
-        title = ai_data.get("title") or "Операция"
+        title = ai.get("title", "Операция")
 
-        # Сумма — уже нормализована внутри analyze_message()
-        amount = int(ai_data.get("amount", 0))
+        # AI amount
+        ai_amount = ai.get("amount", 0)
+        try:
+            ai_amount = int(ai_amount)
+        except:
+            ai_amount = 0
+
+        # Fallback извлекаем сумму из текста
+        extracted = normalize_text_to_number(text) or 0
+
+        # Самый надёжный вариант: берём максимум
+        amount = max(ai_amount, extracted)
 
         if amount <= 0:
             await msg.answer(LANG[lang]["bad_format"])
             return
 
         # Категория
-        category = ai_data.get("category", "other")
+        category = ai.get("category", "other")
+        is_income = bool(ai.get("is_income", False))
 
-        # Доход или расход
-        # В analyze_message() мы уже определяем is_income,
-        # поэтому используем его напрямую
-        is_income = bool(ai_data.get("is_income", False))
+        # ---------------------------------------
+        # 3) Дополнительная проверка ключевых слов
+        # ---------------------------------------
+        if any(w in original_text for w in ["плюс", "+", "получил", "oylik", "keldi", "kelib"]):
+            is_income = True
+        if any(w in original_text for w in ["минус", "-", "расход", "chiqim", "такси", "еда"]):
+            is_income = False
 
-    # ------------------------------
-    # 3) Сохранение в базу
-    # ------------------------------
+    # ---------------------------------------
+    # 4) Сохраняем
+    # ---------------------------------------
     await save_transaction(user_id, title, amount, category, is_income)
 
-    # ------------------------------
-    # 4) Ответ пользователю
-    # ------------------------------
-    if is_income:
-        answer = f"💰 Доход записан\n{title} — <b>{amount:,} UZS</b>"
-    else:
-        answer = f"📄 Расход записан\n{title} — <b>{amount:,} UZS</b>"
+    # ---------------------------------------
+    # 5) Ответ пользователю
+    # ---------------------------------------
+    icon = "💰" if is_income else "📄"
+    await msg.answer(
+        f"{icon} {'Доход' if is_income else 'Расход'} записан\n{title} — <b>{amount:,} UZS</b>"
+        .replace(",", " ")
+    )
 
-    await msg.answer(answer.replace(",", " "))
 
-# -------------------- VOICE HANDLER --------------------
+# ============================================================
+#                           VOICE
+# ============================================================
 @dp.message(F.voice)
 async def voice_handler(msg: Message):
     user_id = msg.from_user.id
-    lang = await get_lang(user_id)
 
     file_id = msg.voice.file_id
     path = f"voice_{user_id}.ogg"
 
-    await download_voice(bot, file_id, path)
+    await download_voice(bot, file_id,  
 
     text = await transcribe_voice(path)
     os.remove(path)
@@ -258,13 +288,17 @@ async def voice_handler(msg: Message):
     await process_text(msg, text)
 
 
-# -------------------- TEXT EXPENSE HANDLER --------------------
+# ============================================================
+#                           TEXT
+# ============================================================
 @dp.message(F.text)
-async def expense_text_handler(msg: Message):
+async def text_handler(msg: Message):
     await process_text(msg, msg.text)
 
 
-# -------------------- MAIN --------------------
+# ============================================================
+#                           MAIN
+# ============================================================
 async def main():
     await init_db()
     await dp.start_polling(bot)
