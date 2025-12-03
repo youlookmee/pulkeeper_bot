@@ -9,7 +9,8 @@ UZ_NUMBERS = {
     "эллик": 50, "олтмиш": 60, "етмиш": 70, "саксон": 80, "тўқсон": 90,
 
     "юз": 100, "йуз": 100, "юзта": 100,
-    "минг": 1000, "млн": 1_000_000, "миллион": 1_000_000,
+    "минг": 1000, "ming": 1000,
+    "млн": 1_000_000, "миллион": 1_000_000, "million": 1_000_000,
     "ярим": 500_000
 }
 
@@ -28,6 +29,11 @@ RU_NUMBERS = {
     "тысяч": 1000, "тысяча": 1000, "тысячи": 1000,
     "млн": 1_000_000, "миллион": 1_000_000,
     "полмиллиона": 500_000
+}
+
+MULTIPLIERS = {
+    "млн": 1_000_000, "million": 1_000_000, "миллион": 1_000_000,
+    "тыс": 1000, "тысяча": 1000, "ming": 1000, "минг": 1000
 }
 
 
@@ -55,23 +61,32 @@ def words_to_number(words: list[str], table: dict) -> int:
 
 
 def normalize_text_to_number(text: str) -> int | None:
-    """Преобразует узбекские/русские слова в число"""
+    """Поддерживает:
+    - 1 млн, 1.5 млн, 30 тыс
+    - 1 000 000
+    - бир миллион / ikki ming
+    """
 
-    # 1) Ищем цифры сразу
-    numbers = re.findall(r"\d[\d ]+", text)
-    if numbers:
-        cleaned = numbers[0].replace(" ", "")
-        return int(cleaned)
+    text = text.lower().strip()
 
-    # 2) преобразуем текст в слова
-    words = re.findall(r"[a-zA-Zа-яА-ЯёЁўқғҳʼ'’]+", text.lower())
+    # 1) Если цифры + множитель: "1.5 млн", "30 тыс"
+    match = re.findall(r"([\d\.,]+)\s*(млн|million|миллион|тыс|ming|минг)", text)
+    if match:
+        num = match[0][0].replace(",", ".")
+        mul = MULTIPLIERS.get(match[0][1], 1)
+        return int(float(num) * mul)
 
-    # узбекские
+    # 2) Просто цифры
+    digits = re.findall(r"\d[\d\s]*", text)
+    if digits:
+        return int(digits[0].replace(" ", ""))
+
+    # 3) Слова (узбек/рус)
+    words = re.findall(r"[a-zA-Zа-яА-ЯёЁўқғҳʼ'’]+", text)
+
     uz_sum = words_to_number(words, UZ_NUMBERS)
-
-    # русские
     ru_sum = words_to_number(words, RU_NUMBERS)
 
-    final_number = max(uz_sum, ru_sum)
+    final = max(uz_sum, ru_sum)
 
-    return final_number if final_number > 0 else None
+    return final if final > 0 else None
