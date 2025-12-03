@@ -1,50 +1,51 @@
-# ai.py — GPT-4.1-mini Integration for PulKeeper v3.0
 import os
+import aiohttp
 import json
-from openai import OpenAI
 
-# New correct client initialization
-client = OpenAI()   # автоматически возьмёт OPENAI_API_KEY из окружения
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+
 
 async def analyze_message(text: str):
     """
-    Sends user message to GPT-4.1-mini and expects structured JSON output.
+    Отправляет текст в DeepSeek и получает структуру:
+      { "category": "...", "amount": 15000, "title": "такси" }
     """
+
     prompt = f"""
-You are an AI finance assistant. Your task is to read the user's message
-and convert it into a structured JSON transaction.
+Ты — финансовый ассистент. 
+Разбери текст расхода и верни строго JSON формата:
 
-The user may write in Russian, Uzbek, or English.
-
-Your output MUST be ONLY valid JSON with no explanations.
-
-JSON format:
 {{
-  "type": "expense" | "income" | "unknown",
-  "amount": number|null,
-  "category": string|null,
-  "title": string|null,
-  "description": string|null,
-  "date": "YYYY-MM-DD",
-  "valid": true|false,
-  "reason": string
+  "title": "<название>",
+  "amount": <число>,
+  "category": "<одна категория: transport, food, fun, other>"
 }}
+
+Текст: "{text}"
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": text}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+    }
+
+    body = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "user", "content": prompt}
         ],
-        temperature=0.2,
-    )
+        "temperature": 0.1
+    }
 
-    raw = response.choices[0].message["content"]
+    async with aiohttp.ClientSession() as session:
+        async with session.post(DEEPSEEK_URL, headers=headers, json=body) as resp:
+            data = await resp.json()
 
-    try:
-        data = json.loads(raw)
-    except:
-        return {"valid": False, "reason": "Invalid JSON from model"}
-
-    return data
+            try:
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+                return parsed
+            except Exception as e:
+                print("DeepSeek parse error:", e, data)
+                return None
