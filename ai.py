@@ -52,22 +52,22 @@ async def transcribe_voice(file_path: str) -> str | None:
 
 
 # ----------------------------------------------------------
-# 3) DeepSeek — разбор текста (если Whisper дал текст)
+# 3) DeepSeek — разбор текста
 # ----------------------------------------------------------
 async def analyze_message(text: str):
     """
     Анализ текста/голоса через DeepSeek.
     Возвращает JSON:
     {
-        "title": "такси",
+        "title": "...",
         "amount": 15000,
         "category": "transport",
-        "is_income": false
+        "is_income": true/false
     }
     """
 
     prompt = f"""
-Ты ИИ-помощник для финансов.  
+Ты ИИ-помощник для финансов.
 Разбери текст и верни строго JSON.
 
 Определи:
@@ -114,8 +114,17 @@ async def analyze_message(text: str):
 
             try:
                 content = data["choices"][0]["message"]["content"]
+
+                # очищаем JSON от ```json ```
                 content = content.replace("```json", "").replace("```", "").strip()
-                return json.loads(content)
+
+                result = json.loads(content)
+
+                # 🔥 НОРМАЛИЗАЦИЯ СУММЫ
+                # Поддерживает: "1 млн", "30 тыс", "1.5 млн", "1 000 000"
+                result["amount"] = normalize_text_to_number(str(result["amount"]))
+
+                return result
 
             except Exception as e:
                 print("DeepSeek parse error:", e, "RAW:", data)
