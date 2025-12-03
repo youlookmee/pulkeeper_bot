@@ -113,18 +113,29 @@ async def balance_handler(msg: Message):
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        total_spent = await conn.fetchval("""
-            SELECT COALESCE(SUM(amount_uzs), 0)
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN is_income THEN amount_uzs END), 0) AS income,
+                COALESCE(SUM(CASE WHEN NOT is_income THEN amount_uzs END), 0) AS expense
             FROM transactions
             WHERE user_id = $1
-        """, msg.from_user.id)
+            """,
+            msg.from_user.id,
+        )
+
+    income = int(row["income"])
+    expense = int(row["expense"])
+    balance = income - expense
 
     text = (
-        f"{LANG[lang]['balance_title']}:\n"
-        f"{int(total_spent):,} UZS"
+        f"💰 Доходы: <b>{income:,} UZS</b>\n"
+        f"💸 Расходы: <b>{expense:,} UZS</b>\n"
+        f"📊 Баланс: <b>{balance:,} UZS</b>"
     ).replace(",", " ")
 
-    await msg.answer(text, reply_markup=balance_keyboard(lang))
+    await msg.answer(text)
+
 
 
 # -------------------- HISTORY --------------------
@@ -182,46 +193,45 @@ async def send_history(uid: int, target):
 
 # -------------------- ADD EXPENSE (DeepSeek) --------------------
 
+# -------------------- ADD EXPENSE / INCOME --------------------
 @dp.message(F.text)
 async def exp(msg: Message):
+    ai_data = await analyze_message(msg.text)
 
-    # Запускаем DeepSeek анализ текста
-    ai_res = await analyze_message(msg.text)
-    print("AI RESULT:", ai_res)
-
-    if not ai_res or "amount" not in ai_res:
+    if not ai_data:
         await msg.answer("⚠️ Я не смог понять сумму. Пример: такси 30000")
         return
 
-    title = ai_res.get("title") or "other"
-    category_key = ai_res.get("category") or "other"
+    title = ai_data.get("title")
+    amount = ai_data.get("amount")
+    category = ai_data.get("category")
+    is_income = ai_data.get("is_income", False)
 
-    try:
-        amt = int(ai_res["amount"])
-    except:
-        await msg.answer("⚠️ Напишите сумму числом. Например: кофе 15000")
+    if not amount:
+        await msg.answer("⚠️ Я не смог определить сумму.")
         return
 
-    lang = await get_lang(msg.from_user.id)
-    category_label = CATEGORY_LABELS.get(category_key, CATEGORY_LABELS["other"])[lang]
-
-    # сохраняем в БД
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO transactions (user_id, title, category, amount_uzs)
-            VALUES ($1,$2,$3,$4)
-        """, msg.from_user.id, title, category_key, amt)
+        await conn.execute(
+            """
+            INSERT INTO transactions (user_id, title, category, amount_uzs, is_income)
+            VALUES ($1,$2,$3,$4,$5)
+            """,
+            msg.from_user.id,
+            title,
+            category,
+            amount,
+            is_income
+        )
 
-    # ответ пользователю
-    text = {
-        "ru": f"🛡 Расход записан\n{category_label} — <b>{amt:,} UZS</b>",
-        "uz": f"🛡 Xarajat yozildi\n{category_label} — <b>{amt:,} UZS</b>",
-        "en": f"🛡 Expense recorded\n{category_label} — <b>{amt:,} UZS</b>",
-    }[lang].replace(",", " ")
+    # Ответ пользователю
+    if is_income:
+        text = f"💰 Доход записан\n<b>{title}</b> — <b>{amount:,} UZS</b>"
+    else:
+        text = f"🧾 Расход записан\n<b>{title}</b> — <b>{amount:,} UZS</b>"
 
-    await msg.answer(text)
-
+    await msg.answer(text.replace(",", " "))
 
 # -------------------- MAIN --------------------
 
