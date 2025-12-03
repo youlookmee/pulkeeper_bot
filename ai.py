@@ -1,6 +1,7 @@
 import os
 import aiohttp
 import json
+from utils_number import normalize_text_to_number
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
@@ -31,6 +32,20 @@ async def transcribe_voice(file_path: str) -> str | None:
     except Exception as e:
         print("Whisper error:", e)
         return None
+        
+# 1 — Whisper дал текст
+text = transcript
+
+# 2 — пробуем извлечь сумму сами (слова → число)
+amount_from_words = normalize_text_to_number(text)
+
+# 3 — если нашли сумму — отдаём напрямую в бот
+if amount_from_words:
+    return {
+        "title": text,
+        "amount": amount_from_words,
+        "category": "other"
+    }
 
 # ------------------ ANALYZE TEXT (DEEPSEEK) ------------------
 async def analyze_message(text: str):
