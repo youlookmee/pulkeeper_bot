@@ -8,11 +8,10 @@ DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
 async def analyze_message(text: str):
     """
-    Анализ текста: определение дохода или расхода.
-    AI обязан вернуть строгий JSON:
-
+    Анализ текста через DeepSeek.
+    Возвращает:
     {
-      "title": "текст",
+      "title": "транспорт",
       "amount": 15000,
       "category": "transport",
       "is_income": false
@@ -20,40 +19,37 @@ async def analyze_message(text: str):
     """
 
     prompt = f"""
-Ты — финансовый ассистент. Разбери текст пользователя и верни СТРОГО JSON.
-
-Категории для расхода:
-- transport
-- food
-- fun
-- other
-
-Если это ДОХОД — категория должна быть "income", а поле is_income = true.
+Ты — финансовый ассистент. Твоя задача — разобрать пользовательский текст
+и вернуть строго JSON (без текста вокруг!). 
 
 Правила:
-1. Если фраза содержит: "зарплата", "получил", "пришло", "доход", "добавить сумму", "+100000" → это доход.
-2. Если фраза содержит покупку — это расход.
-3. Сумму всегда преобразуй в число: "20k" → 20000, "3 млн" → 3000000.
-4. Верни ТОЛЬКО JSON.
+1. Найди сумму. Примеры:
+   "20k" → 20000, "15 000" → 15000, "10тыс" → 10000.
+2. Определи title — название расхода/дохода.
+3. Определи category из списка:
+   - transport
+   - food
+   - fun
+   - home
+   - health
+   - income
+   - other
+4. Определи is_income:
+   true  — если это доход ("получил", "заработал", "пришло", "+500000")
+   false — если расход ("потратил", "купил", "такси", "еда")
 
-ПРИМЕР ДОХОДА:
-{{
-  "title": "зарплата",
-  "amount": 3000000,
-  "category": "income",
-  "is_income": true
-}}
+ВЕРНИ ТОЛЬКО JSON!
 
-ПРИМЕР РАСХОДА:
+ПРИМЕР:
 {{
   "title": "такси",
-  "amount": 20000,
+  "amount": 18000,
   "category": "transport",
   "is_income": false
 }}
 
-ТЕКСТ ПОЛЬЗОВАТЕЛЯ: "{text}"
-Ответи только JSON:
+Текст пользователя: "{text}"
+Ответ JSON:
 """
 
     headers = {
@@ -63,9 +59,7 @@ async def analyze_message(text: str):
 
     body = {
         "model": "deepseek-chat",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1
     }
 
@@ -76,11 +70,12 @@ async def analyze_message(text: str):
             try:
                 content = data["choices"][0]["message"]["content"]
 
-                # DeepSeek часто добавляет ```json
+                # Удаляем код-блоки DeepSeek
                 content = content.replace("```json", "").replace("```", "").strip()
 
                 return json.loads(content)
 
             except Exception as e:
-                print("DeepSeek PARSE ERROR:", e, "RAW:", data)
+                print("DeepSeek parse error:", e)
+                print("RAW:", data)
                 return None
