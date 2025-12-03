@@ -198,83 +198,105 @@ async def save_transaction(user_id, title, amount, category, is_income):
 async def process_text(msg: Message, text: str):
     user_id = msg.from_user.id
     lang = await get_lang(user_id)
-    original_text = text.lower()
+    original_text = (text or "").lower().strip()
 
-    # ---------------------------------------
-    # 1) Локальный быстрый парсер
-    # ---------------------------------------
+    # debug log
+    def dbg_write(s: str):
+        try:
+            with open("debug.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.utcnow().isoformat()} | {s}\n")
+        except:
+            pass
+
+    dbg_write(f"INCOMING: user={user_id} text={text}")
+
+    # 1) локальный парсер
     parsed = parse_expense(text)
+    dbg_write(f"PARSED: {parsed}")
+
+    title = "Операция"
+    amount = 0
+    category = "other"
+    is_income = False
 
     if parsed:
-        title, amount, category, _ = parsed
-        is_income = (category == "income")
+        # parse_expense вернул (title, amount, category, detected_lang)
+        try:
+            title, amount, category, _ = parsed
+        except Exception:
+            # на случай других форматов
+            dbg_write(f"PARSE_ERROR: unexpected parsed format: {parsed}")
+            parsed = None
 
-    else:
-        # ---------------------------------------
-        # 2) DeepSeek-анализ
-        # ---------------------------------------
+        if parsed:
+            is_income = (category == "income")
+
+    if not parsed:
+        # 2) AI-анализ
         ai = await analyze_message(text)
+        dbg_write(f"AI: {ai}")
 
         if not ai:
             await msg.answer(LANG[lang]["bad_format"])
             return
 
-        title = ai.get("title", "Операция")
-
-        # AI amount
-        ai_amount = ai.get("amount", 0)
+        title = ai.get("title", title)
         try:
-            ai_amount = int(ai_amount)
+            amount = int(ai.get("amount", 0))
         except:
-            ai_amount = 0
-
-        # fallback из текста
-        extracted = normalize_text_to_number(text) or 0
-
-        amount = max(ai_amount, extracted)
-
-        if amount <= 0:
-            await msg.answer(LANG[lang]["bad_format"])
-            return
-
-        category = ai.get("category", "other")
+            amount = 0
+        category = ai.get("category", category)
         is_income = bool(ai.get("is_income", False))
 
-        # ---------------------------------------
-        # 3) Умная проверка ключевых слов
-        # ---------------------------------------
-        income_words = [
-            "плюс", "+", "получил", "зарплата", "зп", "з.п", "oylik",
-            "maosh", "keldi", "kelib", "kelib tushdi", "добавь",
-            "add", "qo'sh", "qosh", "qo‘sh"
-        ]
+    # 3) fallback: извлекаем сумму из оригинального текста, если нужно
+    if not amount or amount <= 0:
+        extracted = normalize_text_to_number(text) or 0
+        if extracted > 0:
+            dbg_write(f"EXTRACTED_FROM_TEXT: {extracted}")
+            amount = extracted
 
-        expense_words = [
-            "минус", "-", "расход", "потратил", "такси",
-            "еда", "chiqim", "avoqat"
-        ]
+    # 4) умная проверка ключевых слов (всегда выполняем)
+    income_words = [
+        "плюс", "+", "получил", "получила", "получилa", "зарплата", "зп", "з.п", "oylik",
+        "maosh", "з/п", "зп.", "keldi", "kelib", "kelib tushdi", "добавь",
+        "add", "qo'sh", "qosh", "qo‘sh", "поступил", "пришло", "пришёл", "пришла"
+    ]
 
-        if any(w in original_text for w in income_words):
-            is_income = True
+    expense_words = [
+        "минус", "-", "расход", "потратил", "потратила", "такси",
+        "еда", "chiqim", "avoqat", "купил", "оплатил", "снял"
+    ]
 
-        if any(w in original_text for w in expense_words):
-            is_income = False
+    # если найдены слова, то они имеют приоритет и переопределяют is_income
+    if any(w in original_text for w in income_words):
+        dbg_write("KEYWORD_HINT: income")
+        is_income = True
+    if any(w in original_text for w in expense_words):
+        dbg_write("KEYWORD_HINT: expense")
+        is_income = False
 
-    # ---------------------------------------
-    # 4) Сохраняем
-    # ---------------------------------------
-    await save_transaction(user_id, title, amount, category, is_income)
+    # 5) ещё дополнительная эвристика: если category явно "income" или "salary" — форсируем
+    if category and category.lower() in ("income", "salary", "oylik", "maosh"):
+        dbg_write(f"CATEGORY_HINT: {category} -> income")
+        is_income = True
 
-    # ---------------------------------------
-    # 5) Ответ пользователю
-    # ---------------------------------------
-    icon = "💰" if is_income else "📄"
-    kind = "Доход" if is_income else "Расход"
+    # 6) финальная валидация суммы
+    if not amount or amount <= 0:
+        await msg.answer(LANG[lang]["bad_format"])
+        dbg_write("FINAL: bad_format (amount<=0)")
+        return
 
-    await msg.answer(
-        f"{icon} {kind} записан\n{title} — <b>{amount:,} UZS</b>".replace(",", " ")
-    )
+    # 7) сохраняем
+    await save_transaction(user_id, title, amount, category or "other", is_income)
+    dbg_write(f"SAVED: user={user_id} title={title} amount={amount} is_income={is_income} category={category}")
 
+    # 8) ответ пользователю
+    if is_income:
+        ans = f"💰 Доход записан\n{title} — <b>{amount:,} UZS</b>"
+    else:
+        ans = f"📄 Расход записан\n{title} — <b>{amount:,} UZS</b>"
+
+    await msg.answer(ans.replace(",", " "))
 
 # ============================================================
 #                           VOICE
