@@ -3,44 +3,57 @@ import aiohttp
 import json
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-print("DeepSeek KEY LOADED? →", bool(DEEPSEEK_API_KEY))
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+
 
 async def analyze_message(text: str):
     """
-    Анализ расхода через DeepSeek.
-    AI обязан вернуть чистый JSON вида:
+    Анализ текста: определение дохода или расхода.
+    AI обязан вернуть строгий JSON:
+
     {
-      "title": "такси",
+      "title": "текст",
       "amount": 15000,
-      "category": "transport"
+      "category": "transport",
+      "is_income": false
     }
     """
 
     prompt = f"""
-Ты — финансовый ассистент. Разбери пользовательский текст и верни строго JSON (без пояснений).
+Ты — финансовый ассистент. Разбери текст пользователя и верни СТРОГО JSON.
 
-Категории:
+Категории для расхода:
 - transport
 - food
 - fun
 - other
 
-Инструкция:
-1. Найди сумму (число). Если написано "20k" → 20000, "15 000" → 15000.
-2. Найди название расхода.
-3. Определи категорию.
-4. Верни ТОЛЬКО JSON, без текста и без форматирования.
+Если это ДОХОД — категория должна быть "income", а поле is_income = true.
 
-Пример правильного ответа:
+Правила:
+1. Если фраза содержит: "зарплата", "получил", "пришло", "доход", "добавить сумму", "+100000" → это доход.
+2. Если фраза содержит покупку — это расход.
+3. Сумму всегда преобразуй в число: "20k" → 20000, "3 млн" → 3000000.
+4. Верни ТОЛЬКО JSON.
+
+ПРИМЕР ДОХОДА:
+{{
+  "title": "зарплата",
+  "amount": 3000000,
+  "category": "income",
+  "is_income": true
+}}
+
+ПРИМЕР РАСХОДА:
 {{
   "title": "такси",
   "amount": 20000,
-  "category": "transport"
+  "category": "transport",
+  "is_income": false
 }}
 
-Пользовательский текст: "{text}"
-Ответи JSON:
+ТЕКСТ ПОЛЬЗОВАТЕЛЯ: "{text}"
+Ответи только JSON:
 """
 
     headers = {
@@ -63,11 +76,11 @@ async def analyze_message(text: str):
             try:
                 content = data["choices"][0]["message"]["content"]
 
-                # иногда DeepSeek пишет ```json ... ```
+                # DeepSeek часто добавляет ```json
                 content = content.replace("```json", "").replace("```", "").strip()
 
                 return json.loads(content)
 
             except Exception as e:
-                print("DeepSeek parse error:", e, "RAW:", data)
+                print("DeepSeek PARSE ERROR:", e, "RAW:", data)
                 return None
