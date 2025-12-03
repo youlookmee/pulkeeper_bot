@@ -11,23 +11,18 @@ WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions"
 
 # ------------------ TRANSCRIBE AUDIO (WHISPER) ------------------
 async def transcribe_voice(file_path: str) -> str | None:
-    """Отправляет .ogg файл в Whisper и возвращает текст"""
+    """Отправляет файл (ogg/mp3/webm/m4a) в Whisper и возвращает текст"""
+
     headers = {
         "Authorization": f"Bearer {WHISPER_API_KEY}"
-    }
-
-    data = {
-        "model": "whisper-1",
-        "language": "ru"
     }
 
     try:
         async with aiohttp.ClientSession() as session:
             with open(file_path, "rb") as f:
                 form = aiohttp.FormData()
-                form.add_field("file", f, filename="audio.ogg", content_type="audio/ogg")
+                form.add_field("file", f, filename=os.path.basename(file_path))
                 form.add_field("model", "whisper-1")
-                form.add_field("language", "ru")
 
                 async with session.post(WHISPER_URL, headers=headers, data=form) as resp:
                     result = await resp.json()
@@ -36,7 +31,6 @@ async def transcribe_voice(file_path: str) -> str | None:
     except Exception as e:
         print("Whisper error:", e)
         return None
-
 
 # ------------------ ANALYZE TEXT (DEEPSEEK) ------------------
 async def analyze_message(text: str):
