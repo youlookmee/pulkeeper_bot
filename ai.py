@@ -3,6 +3,7 @@ import aiohttp
 import json
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+print("DeepSeek KEY LOADED? →", bool(DEEPSEEK_API_KEY))
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
 async def analyze_message(text: str):
