@@ -27,6 +27,12 @@ bot = Bot(
 
 dp = Dispatcher()
 
+# ===========================================
+async def download_voice(bot, file_path, uid):
+    ext = os.path.splitext(file_path)[1] or ".ogg"
+    local_file = f"voice_{uid}{ext}"
+    await bot.download_file(file_path, local_file)
+    return local_file
 
 # ===========================================
 # LANGUAGE HELPERS
@@ -232,11 +238,15 @@ async def voice_handler(msg: Message):
     file = await bot.get_file(file_id)
     file_path = file.file_path
 
-    local_file = f"voice_{uid}.ogg"
-    await bot.download_file(file_path, local_file)
+    local_file = await download_voice(bot, file_path, uid)
 
-    # Расшифровываем аудио
     text = await transcribe_voice(local_file)
+
+    # удаляем файл после обработки
+    try:
+        os.remove(local_file)
+    except:
+        pass
 
     if not text:
         await msg.answer("⚠️ Не удалось распознать голос. Попробуйте снова.")
