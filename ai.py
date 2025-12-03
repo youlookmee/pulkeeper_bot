@@ -5,24 +5,41 @@ import json
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
-
 async def analyze_message(text: str):
     """
-    Отправляет текст в DeepSeek и получает структуру:
-      { "category": "...", "amount": 15000, "title": "такси" }
+    Анализ расхода через DeepSeek.
+    AI обязан вернуть чистый JSON вида:
+    {
+      "title": "такси",
+      "amount": 15000,
+      "category": "transport"
+    }
     """
 
     prompt = f"""
-Ты — финансовый ассистент. 
-Разбери текст расхода и верни строго JSON формата:
+Ты — финансовый ассистент. Разбери пользовательский текст и верни строго JSON (без пояснений).
 
+Категории:
+- transport
+- food
+- fun
+- other
+
+Инструкция:
+1. Найди сумму (число). Если написано "20k" → 20000, "15 000" → 15000.
+2. Найди название расхода.
+3. Определи категорию.
+4. Верни ТОЛЬКО JSON, без текста и без форматирования.
+
+Пример правильного ответа:
 {{
-  "title": "<название>",
-  "amount": <число>,
-  "category": "<одна категория: transport, food, fun, other>"
+  "title": "такси",
+  "amount": 20000,
+  "category": "transport"
 }}
 
-Текст: "{text}"
+Пользовательский текст: "{text}"
+Ответи JSON:
 """
 
     headers = {
@@ -44,8 +61,12 @@ async def analyze_message(text: str):
 
             try:
                 content = data["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                return parsed
+
+                # иногда DeepSeek пишет ```json ... ```
+                content = content.replace("```json", "").replace("```", "").strip()
+
+                return json.loads(content)
+
             except Exception as e:
-                print("DeepSeek parse error:", e, data)
+                print("DeepSeek parse error:", e, "RAW:", data)
                 return None
