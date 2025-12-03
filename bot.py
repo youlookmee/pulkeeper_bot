@@ -311,6 +311,7 @@ async def voice_handler(msg: Message):
     await download_voice(bot, file_id, path)
 
     text = await transcribe_voice(path)
+    print("VOICE RAW TRANSCRIBE:", text)
 
     if os.path.exists(path):
         os.remove(path)
