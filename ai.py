@@ -3,53 +3,62 @@ import aiohttp
 import json
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions"
 
 
-async def analyze_message(text: str):
-    """
-    Анализ текста через DeepSeek.
-    Возвращает:
-    {
-      "title": "транспорт",
-      "amount": 15000,
-      "category": "transport",
-      "is_income": false
+# ------------------ TRANSCRIBE AUDIO (WHISPER) ------------------
+async def transcribe_voice(file_path: str) -> str | None:
+    """Отправляет .ogg файл в Whisper и возвращает текст"""
+    headers = {
+        "Authorization": f"Bearer {WHISPER_API_KEY}"
     }
-    """
+
+    data = {
+        "model": "whisper-1",
+        "language": "ru"
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(file_path, "rb") as f:
+                form = aiohttp.FormData()
+                form.add_field("file", f, filename="audio.ogg", content_type="audio/ogg")
+                form.add_field("model", "whisper-1")
+                form.add_field("language", "ru")
+
+                async with session.post(WHISPER_URL, headers=headers, data=form) as resp:
+                    result = await resp.json()
+                    return result.get("text")
+
+    except Exception as e:
+        print("Whisper error:", e)
+        return None
+
+
+# ------------------ ANALYZE TEXT (DEEPSEEK) ------------------
+async def analyze_message(text: str):
+    """Анализ расхода или дохода через DeepSeek. Возвращает JSON."""
+
+    print("AI REQUEST:", text)
 
     prompt = f"""
-Ты — финансовый ассистент. Твоя задача — разобрать пользовательский текст
-и вернуть строго JSON (без текста вокруг!). 
+Ты — финансовый ассистент. Разбери пользовательский текст и верни строго JSON без пояснений.
+
+Определи:
+- title — название  
+- amount — сумма  
+- category — категория (transport, food, fun, other)
+- type — расход или доход: "expense" или "income"
 
 Правила:
-1. Найди сумму. Примеры:
-   "20k" → 20000, "15 000" → 15000, "10тыс" → 10000.
-2. Определи title — название расхода/дохода.
-3. Определи category из списка:
-   - transport
-   - food
-   - fun
-   - home
-   - health
-   - income
-   - other
-4. Определи is_income:
-   true  — если это доход ("получил", "заработал", "пришло", "+500000")
-   false — если расход ("потратил", "купил", "такси", "еда")
+- Если есть + или слова типа "получил", "зарплата" → это доход.
+- Если обычный текст → это расход.
+- Верни только JSON.
 
-ВЕРНИ ТОЛЬКО JSON!
-
-ПРИМЕР:
-{{
-  "title": "такси",
-  "amount": 18000,
-  "category": "transport",
-  "is_income": false
-}}
-
-Текст пользователя: "{text}"
-Ответ JSON:
+Пользовательский текст: "{text}"
 """
 
     headers = {
@@ -60,7 +69,7 @@ async def analyze_message(text: str):
     body = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1
+        "temperature": 0.2
     }
 
     async with aiohttp.ClientSession() as session:
@@ -70,12 +79,13 @@ async def analyze_message(text: str):
             try:
                 content = data["choices"][0]["message"]["content"]
 
-                # Удаляем код-блоки DeepSeek
+                # DeepSeek иногда присылает в виде ```json
                 content = content.replace("```json", "").replace("```", "").strip()
 
-                return json.loads(content)
+                parsed = json.loads(content)
+                print("AI RESULT:", parsed)
+                return parsed
 
             except Exception as e:
-                print("DeepSeek parse error:", e)
-                print("RAW:", data)
+                print("DeepSeek parse error:", e, "RAW:", data)
                 return None
