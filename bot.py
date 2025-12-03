@@ -181,38 +181,61 @@ async def save_transaction(user_id, title, amount, category, is_income):
 
 
 async def process_text(msg: Message, text: str):
-    lang = await get_lang(msg.from_user.id)
+    user_id = msg.from_user.id
+    lang = await get_lang(user_id)
 
-    # 1) Быстрая проверка через локальный парсер
+    # ------------------------------
+    # 1) Локальный быстрый парсер
+    # ------------------------------
     parsed = parse_expense(text)
 
-    if not parsed:
-        # 2) Используем DeepSeek
+    if parsed:
+        # parse_expense вернул (title, amount, category, detected_lang)
+        title, amount, category, _ = parsed
+        is_income = (category == "income")
+
+    else:
+        # ------------------------------
+        # 2) DeepSeek-анализ
+        # ------------------------------
         ai_data = await analyze_message(text)
 
-        if not ai_data or "amount" not in ai_data or not ai_data["amount"]:
+        if not ai_data:
             await msg.answer(LANG[lang]["bad_format"])
             return
 
-        title = ai_data["title"]
-        amount = int(ai_data["amount"])
+        # Название операции
+        title = ai_data.get("title") or "Операция"
+
+        # Сумма — уже нормализована внутри analyze_message()
+        amount = int(ai_data.get("amount", 0))
+
+        if amount <= 0:
+            await msg.answer(LANG[lang]["bad_format"])
+            return
+
+        # Категория
         category = ai_data.get("category", "other")
-        is_income = category == "income"
 
-    else:
-        title, amount, category, detected_lang = parsed
-        is_income = (category == "income")
+        # Доход или расход
+        # В analyze_message() мы уже определяем is_income,
+        # поэтому используем его напрямую
+        is_income = bool(ai_data.get("is_income", False))
 
-    await save_transaction(msg.from_user.id, title, amount, category, is_income)
+    # ------------------------------
+    # 3) Сохранение в базу
+    # ------------------------------
+    await save_transaction(user_id, title, amount, category, is_income)
 
-    # Ответ
+    # ------------------------------
+    # 4) Ответ пользователю
+    # ------------------------------
     if is_income:
-        answer = f"💰 Доход записан\nдоход — <b>{amount:,} UZS</b>"
+        answer = f"💰 Доход записан\n{title} — <b>{amount:,} UZS</b>"
     else:
         answer = f"📄 Расход записан\n{title} — <b>{amount:,} UZS</b>"
 
     await msg.answer(answer.replace(",", " "))
-
 
 # -------------------- VOICE HANDLER --------------------
 @dp.message(F.voice)
