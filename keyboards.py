@@ -1,12 +1,34 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-def draft_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
+
+# -------------------- LANGUAGE KEYBOARD --------------------
+def lang_keyboard():
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✔ Одобрить", callback_data="draft_accept"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data="draft_decline")
-        ],
-        [
-            InlineKeyboardButton(text="✏ Изменить", callback_data="draft_edit")
+            InlineKeyboardButton(text="🇺🇿 O‘zbek", callback_data="lang_uz"),
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
         ]
     ])
+    return kb
+
+
+# -------------------- BALANCE KEYBOARD --------------------
+def balance_keyboard(lang: str):
+    if lang == "uz":
+        text = {
+            "history": "📜 Tarix",
+            "stat": "📊 Statistika"
+        }
+    else:
+        text = {
+            "history": "📜 История",
+            "stat": "📊 Статистика"
+        }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=text["history"], callback_data="history"),
+            InlineKeyboardButton(text=text["stat"], callback_data="stat"),
+        ]
+    ])
+    return kb
