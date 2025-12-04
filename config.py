@@ -1,16 +1,25 @@
 import os
-from dataclasses import dataclass
 from dotenv import load_dotenv
 
+# Загружаем .env
 load_dotenv()
 
-@dataclass
-class Settings:
-    bot_token: str
-    db_url: str
+# Telegram бот
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-def get_settings() -> Settings:
-    return Settings(
-        bot_token=os.getenv("BOT_TOKEN", ""),
-        db_url=os.getenv("DATABASE_URL", ""),
-    )
+# DeepSeek API
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
+
+# Whisper API (OpenAI)
+WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+
+# Проверка
+if not TELEGRAM_TOKEN:
+    raise ValueError("Ошибка: TELEGRAM_TOKEN отсутствует в .env")
+
+if not DEEPSEEK_API_KEY:
+    print("⚠️ Внимание: DEEPSEEK_API_KEY отсутствует в .env")
+
+if not WHISPER_API_KEY:
+    print("⚠️ Whisper не будет работать: WHISPER_API_KEY отсутствует в .env")
