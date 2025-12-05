@@ -1,6 +1,6 @@
 # handlers/photo_handler.py
 from telegram.ext import MessageHandler, filters
-from utils.ocr import read_text
+from utils.ocr import ocr_read
 from parser import parse_transaction
 from handlers.transaction_handler import save_transaction
 
@@ -16,7 +16,7 @@ async def photo_handler(update, context):
     await message.reply_text("📄 Распознаю чек...")
 
     # OCR (DeepSeek)
-    text = read_text(image_bytes)
+    text = ocr_read(image_bytes)
 
     if not text:
         await message.reply_text("❌ Не удалось прочитать чек.")
