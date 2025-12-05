@@ -63,8 +63,8 @@ def main():
     
     # Фото-чеки
     app.add_handler(photo_handler)                          # реагирует на "📸 Распознаю чек..."
-    app.add_handler(MessageHandler(filters.PHOTO, receipt_handler))  # загрузка фото чека
-    app.add_handler(CallbackQueryHandler(receipt_callback)) # кнопки: одобрить/отклонить
+    app.add_handler(MessageHandler(filters.PHOTO, receipt_handler))
+    app.add_handler(CallbackQueryHandler(receipt_callback))
 
     # Авто-парсер суммы
     app.add_handler(transaction_handler)
