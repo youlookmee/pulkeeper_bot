@@ -1,54 +1,33 @@
-from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes
-from sqlalchemy import extract
-
-from services.db import SessionLocal, Transaction
-from utils.format import fmt
+# handlers/month_handler.py
+from telegram.ext import CommandHandler
+from services.db import get_session, Transaction
 
 
-async def month_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+async def month_report(update, context):
+    session = get_session()
 
-    session = SessionLocal()
+    tx_list = session.query(Transaction).filter(
+        Transaction.user_id == update.message.from_user.id
+    ).all()
 
-    try:
-        # Фильтруем транзакции за текущий месяц
-        month = update.effective_message.date.month
-        year = update.effective_message.date.year
+    session.close()
 
-        tx = (
-            session.query(Transaction)
-            .filter(
-                Transaction.user_id == user_id,
-                extract("month", Transaction.tx_date) == month,
-                extract("year", Transaction.tx_date) == year,
-            )
-            .all()
-        )
+    if not tx_list:
+        await update.message.reply_text("За месяц ничего нет.")
+        return
 
-        if not tx:
-            await update.message.reply_text("❗ В этом месяце пока нет транзакций.")
-            return
+    income = sum(t.amount for t in tx_list if t.type == "income")
+    expense = sum(t.amount for t in tx_list if t.type == "expense")
+    balance = income - expense
 
-        income = sum(t.amount for t in tx if t.t_type == "income")
-        expense = sum(t.amount for t in tx if t.t_type == "expense")
+    msg = (
+        "📅 Отчёт за месяц\n\n"
+        f"Доходы: {income:,}\n"
+        f"Расходы: {expense:,}\n"
+        f"Баланс: {balance:,}"
+    )
 
-        balance = income - expense
-
-        text = (
-            f"📅 <b>Отчёт за месяц</b>\n"
-            f"———————————————\n"
-            f"Доходы: <b>{fmt(income)}</b>\n"
-            f"Расходы: <b>{fmt(expense)}</b>\n"
-            f"Чистый баланс: <b>{fmt(balance)}</b>\n"
-            f"Транзакций: {len(tx)}"
-        )
-
-        await update.message.reply_text(text, parse_mode="HTML")
-
-    finally:
-        session.close()
+    await update.message.reply_text(msg)
 
 
-# Handler
 month_handler = CommandHandler("month", month_report)
