@@ -49,10 +49,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
 
     # Команда: /add 20000 кофе
-    app.add_handler(add_tx_handler)
+    app.add_handler(transaction_handler)
 
     app.add_handler(report_handler)
-    app.add_handler(month_handler)
+    app.add_handler(month_handler) 
 
 
     # Автоматическое распознавание всех сообщений
