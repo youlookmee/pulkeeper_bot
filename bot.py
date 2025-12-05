@@ -13,6 +13,8 @@ from config import TELEGRAM_TOKEN
 from handlers.transaction_handler import transaction_handler      # авто-запись суммы
 from handlers.report_handler import report_handler                # /report
 from handlers.month_handler import month_handler                  # /month
+from handlers.day_handler import day_handler
+
 # (дальше добавим /day, /chart, AI и др.)
 
 # ---- DB ----
