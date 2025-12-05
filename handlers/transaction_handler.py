@@ -1,7 +1,7 @@
 # transaction_handler.py
 from telegram.ext import CommandHandler, MessageHandler, filters
 from parser import parse_transaction
-from db import get_session, Transaction
+from services.db import get_session, Transaction
 
 
 # -------------------------------
