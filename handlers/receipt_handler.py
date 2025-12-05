@@ -1,88 +1,77 @@
-# handlers/receipt_handler.py
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
+from handlers.transaction_handler import save_transaction
 
-from utils.ocr import extract_from_receipt
-from services.db import save_transaction
-
-logger = logging.getLogger(__name__)
+# Временное хранилище (если нет Redis)
+TEMP_RECEIPTS = {}
 
 
-async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение фото, OCR → извлечение суммы → вывод карточки подтверждения."""
+async def receipt_handler(update, context):
+    """Вызывается после OCR. Показывает кнопки подтверждения."""
+    
     message = update.message
+    data = context.user_data.get("receipt_data")
 
-    if not message.photo:
+    if not data:
+        await message.reply_text("❌ Ошибка: данные чека не найдены.")
         return
 
-    await message.reply_text("📄 Распознаю чек...")
+    # Сохраняем данные в буфер по user_id
+    TEMP_RECEIPTS[message.from_user.id] = data
 
-    # выбираем лучшее качество фото
-    file_id = message.photo[-1].file_id
-    file = await context.bot.get_file(file_id)
-
-    # скачиваем
-    img_path = "/tmp/receipt.jpg"
-    await file.download_to_drive(img_path)
-
-    # OCR
-    try:
-        import easyocr
-        reader = easyocr.Reader(["ru", "en"], gpu=False)
-        ocr_raw = reader.readtext(img_path, detail=0)
-        ocr_text = "\n".join(ocr_raw)
-    except Exception as e:
-        logger.exception(e)
-        return await message.reply_text("❌ Не удалось прочитать чек.")
-
-    # анализ
-    data = extract_from_receipt(ocr_text)
-
-    amount = data.get("amount")
-    merchant = data.get("merchant") or "Неизвестно"
-    date = data.get("date") or "Не указана"
-    description = data.get("description") or "Без описания"
-
-    if not amount:
-        return await message.reply_text("❌ Не получилось определить сумму.")
-
-    # кнопки
-    keyboard = InlineKeyboardMarkup([
+    keyboard = [
         [
-            InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve:{amount}:{merchant}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data="decline"),
+            InlineKeyboardButton("✔ Одобрить", callback_data="approve_receipt"),
+            InlineKeyboardButton("✖ Отклонить", callback_data="reject_receipt"),
         ]
-    ])
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
     text = (
-        f"Новая транзакция\n"
-        f"💸 **Сумма:** {amount} UZS\n"
-        f"🏪 **Мерчант:** {merchant}\n"
-        f"📅 **Дата:** {date}\n"
-        f"📝 **Описание:** {description}"
+        "🧾 *Новая транзакция*\n\n"
+        f"💸 *Сумма:* {data['amount']:,} UZS\n"
+        f"🏷 *Категория:* {data['category']}\n"
+        f"📝 *Описание:* {data['description']}\n"
+        f"📅 *Дата:* {data.get('date', '—')}\n\n"
+        "Подтвердить добавление?"
     )
 
-    await message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    await message.reply_markdown(text, reply_markup=reply_markup)
 
 
-async def receipt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кнопок Подтвердить / Отклонить."""
+async def receipt_callback(update, context):
+    """Обрабатывает нажатие кнопок."""
     query = update.callback_query
-    await query.answer()
+    user_id = query.from_user.id
 
-    data = query.data
+    await query.answer()  # Убираем крутилку
 
-    if data == "decline":
-        return await query.edit_message_text("❌ Транзакция отклонена.")
+    data = TEMP_RECEIPTS.get(user_id)
 
-    if data.startswith("approve:"):
-        _, amount, merchant = data.split(":")
+    if not data:
+        await query.edit_message_text("❌ Данные транзакции не найдены.")
+        return
+
+    if query.data == "approve_receipt":
+        # Сохраняем транзакцию
         save_transaction(
-            user_id=query.from_user.id,
-            amount=float(amount),
-            category="прочее",
-            description=f"Чек: {merchant}",
-            tx_type="expense",
+            user_id=user_id,
+            data={
+                "type": "expense",
+                "amount": data["amount"],
+                "category": data["category"],
+                "description": data["description"],
+                "date": data.get("date")
+            }
         )
-        return await query.edit_message_text("✅ Транзакция сохранена!")
+        await query.edit_message_text("✅ Транзакция *успешно добавлена!*")
+        TEMP_RECEIPTS.pop(user_id, None)
+
+    elif query.data == "reject_receipt":
+        await query.edit_message_text("🚫 Транзакция *отклонена*.")    
+        TEMP_RECEIPTS.pop(user_id, None)
+
+
+def receipt_handler_register(app):
+    app.add_handler(CallbackQueryHandler(receipt_callback))
