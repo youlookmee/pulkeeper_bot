@@ -14,6 +14,8 @@ from handlers.transaction_handler import transaction_handler      # авто-з�
 from handlers.report_handler import report_handler                # /report
 from handlers.month_handler import month_handler                  # /month
 from handlers.day_handler import day_handler
+from handlers.chart_handler import get_chart_handler
+
 
 # (дальше добавим /day, /chart, AI и др.)
 
@@ -56,6 +58,7 @@ def main():
     app.add_handler(month_handler)                      # /month
     app.add_handler(day_handler)
     app.add_handler(transaction_handler)                # авто-парсер суммы
+    app.add_handler(get_chart_handler())
 
     logger.info("Bot is running...")
     app.run_polling()
