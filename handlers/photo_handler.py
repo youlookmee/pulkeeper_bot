@@ -1,42 +1,46 @@
-# handlers/photo_handler.py
 from telegram.ext import MessageHandler, filters
-from utils.ocr import extract_from_receipt
-from parser import parse_transaction
+from utils.ocr import extract_from_image
 from handlers.transaction_handler import save_transaction
 
 
 async def photo_handler(update, context):
-    """Обрабатывает фото чека"""
     message = update.message
-
     photo = message.photo[-1]
+
     file = await photo.get_file()
     image_bytes = await file.download_as_bytearray()
 
-    await message.reply_text("📄 Распознаю чек...")
+    await message.reply_text("📄 Распознаю чек через AI...")
 
-    # OCR -> получаем текст из чека
-    text = extract_from_receipt(image_bytes)
-
-    if not text:
-        await message.reply_text("❌ Не удалось прочитать чек.")
-        return
-
-    # Парсим текст чека
-    data = parse_transaction(text)
+    data = extract_from_image(image_bytes)
 
     if not data:
+        await message.reply_text("❌ Не удалось распознать чек.")
+        return
+
+    # Проверяем сумму
+    if not data.get("amount"):
         await message.reply_text("❌ Не получилось определить сумму.")
         return
 
     # Сохраняем транзакцию
-    save_transaction(message.from_user.id, data)
+    save_transaction(
+        user_id=message.from_user.id,
+        data={
+            "amount": data["amount"],
+            "type": "expense",
+            "category": data.get("category", "прочее"),
+            "description": data.get("description", "Чек"),
+            "date": data.get("date")
+        }
+    )
 
     await message.reply_text(
-        f"✅ Распознано!\n"
-        f"Сумма: {data['amount']}\n"
+        f"✅ Чек распознан!\n"
+        f"Сумма: {data['amount']:,}\n"
         f"Категория: {data['category']}\n"
-        f"Описание: {data['description']}"
+        f"Описание: {data['description']}\n"
+        f"Дата: {data.get('date', '—')}"
     )
 
 
