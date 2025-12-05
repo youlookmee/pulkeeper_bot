@@ -1,39 +1,22 @@
 import base64
 import requests
+import pytesseract
+from PIL import Image
+from io import BytesIO
 from config import DEEPSEEK_API_KEY
 
 
-def extract_from_receipt(image_bytes: bytes) -> str:
+def ocr_ai(image_bytes: bytes) -> str:
+    """OCR через DeepSeek Vision"""
     url = "https://api.deepseek.com/v1/chat/completions"
 
-    prompt = """
-    Ты — эксперт по парсингу чеков.  
-    Распознай текст на изображении чека и верни JSON строго в формате:
-
-    {
-      "total": число,
-      "items": [
-         {"name": "...", "price": число},
-      ],
-      "raw_text": "...",
-      "date": "2025-01-01"
-    }
-
-    Если данных нет — ставь null.
-    """
-
-    img_base64 = base64.b64encode(image_bytes).decode()
+    img_b64 = base64.b64encode(image_bytes).decode()
 
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_image", "image_base64": img_base64}
-                ]
-            }
+            {"role": "system", "content": "Extract ALL visible text from this receipt photo."},
+            {"role": "user", "content": [{"type": "input_image", "image_base64": img_b64}]}
         ]
     }
 
@@ -42,10 +25,27 @@ def extract_from_receipt(image_bytes: bytes) -> str:
         "Content-Type": "application/json"
     }
 
-    response = requests.post(url, json=payload, headers=headers).json()
-
-    import json
     try:
-        return json.loads(response["choices"][0]["message"]["content"])
+        r = requests.post(url, json=payload, headers=headers).json()
+        return r["choices"][0]["message"]["content"]
     except:
-        return None
+        return ""
+    
+
+def ocr_tesseract(image_bytes: bytes) -> str:
+    """OCR через Tesseract — идеально для UZCARD"""
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        return pytesseract.image_to_string(img, lang="rus+eng")
+    except:
+        return ""
+
+
+def read_text(image_bytes: bytes) -> str:
+    """Каскадное OCR — как у TheoAI"""
+    text_ai = ocr_ai(image_bytes)
+    text_tess = ocr_tesseract(image_bytes)
+
+    if len(text_ai) > len(text_tess):
+        return text_ai
+    return text_tess
