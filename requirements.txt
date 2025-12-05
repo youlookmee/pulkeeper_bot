@@ -1,8 +1,9 @@
 python-telegram-bot==20.7
-requests
 python-dotenv
+psycopg2-binary
+SQLAlchemy
+requests
+Pillow
+numpy
 pandas
 matplotlib
-numpy
-sqlalchemy==1.4.51
-psycopg2-binary
