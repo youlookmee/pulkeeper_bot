@@ -17,6 +17,12 @@ except ImportError:
     add_tx_handler = None
     auto_tx_handler = None
 
+    if add_tx_handler:
+        app.add_handler(add_tx_handler)
+
+    if auto_tx_handler:
+        app.add_handler(auto_tx_handler)
+
 # DB init
 from services.db import init_db
 
