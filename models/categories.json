@@ -1,0 +1,8 @@
+{
+    "погашение долга": ["долг", "loan", "возврат", "orolo", "odobreno"],
+    "перевод": ["перевод", "transfer", "uzcard"],
+    "магазин": ["market", "magazin", "supermarket"],
+    "еда": ["cafe", "restoran", "food"],
+    "развлечения": ["cinema", "kino"],
+    "прочее": []
+}
