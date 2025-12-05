@@ -8,3 +8,5 @@ pandas
 matplotlib
 openai>=1.55.0
 pillow
+aiohttp
+python-multipart
