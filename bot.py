@@ -50,6 +50,8 @@ def main():
     # Автоматическое распознавание всех сообщений
     app.add_handler(auto_tx_handler)
 
+    app.add_handler(report_handler)
+
     logger.info("Bot is running...")
     app.run_polling()
 
