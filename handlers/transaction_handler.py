@@ -74,5 +74,7 @@ async def auto_parse(update, context):
         f"Тип: {parsed['type']}"
     )
 
+from telegram.ext import MessageHandler, filters
 
-auto_tx_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, auto_parse)
+# вот ЭТО и нужно экспортировать!
+transaction_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, auto_tx_handler)
