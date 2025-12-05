@@ -1,32 +1,28 @@
-import base64
 import requests
-from config import DEEPSEEK_API_KEY
+
+OCR_API_KEY = "helloworld"  # бесплатный ключ OCR.Space
 
 
-def ocr_ai(image_bytes: bytes) -> str:
-    url = "https://api.deepseek.com/v1/chat/completions"
+def ocr_read(image_bytes: bytes) -> str:
+    """
+    Отправляет фото в OCR.Space и возвращает распознанный текст.
+    """
 
-    img_b64 = base64.b64encode(image_bytes).decode()
+    url = "https://api.ocr.space/parse/image"
 
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "Extract all text from this receipt photo. Return ONLY raw text."},
-            {"role": "user", "content": [{"type": "input_image", "image_base64": img_b64}]}
-        ]
+    files = {
+        "file": ("image.jpg", image_bytes)
+    }
+    data = {
+        "apikey": OCR_API_KEY,
+        "language": "rus",
+        "isTable": True
     }
 
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    res = requests.post(url, files=files, data=data)
+    result = res.json()
 
     try:
-        r = requests.post(url, json=payload, headers=headers).json()
-        return r["choices"][0]["message"]["content"]
+        return result["ParsedResults"][0]["ParsedText"]
     except:
         return ""
-
-
-def read_text(image_bytes: bytes) -> str:
-    return ocr_ai(image_bytes)
