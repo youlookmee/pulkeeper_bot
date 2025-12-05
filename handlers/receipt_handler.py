@@ -1,46 +1,115 @@
-from telegram.ext import MessageHandler, filters
-from utils.ocr import read_text
-from utils.normalizer import normalize_text
-from utils.parser_ml import extract_amount, extract_date, extract_name, build_description
-from utils.categorizer import categorize
-from handlers.transaction_handler import save_transaction
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, MessageHandler, filters
+
+from utils.ocr import ocr_read
+from services.save_transaction import save_transaction
 
 
-async def receipt_handler(update, context):
-    file = await update.message.photo[-1].get_file()
-    img = await file.download_as_bytearray()
+def parse_ocr_text(text: str):
+    """
+    Ищем сумму и описание.
+    """
+    lines = text.splitlines()
+    cleaned = [l.strip() for l in lines if l.strip()]
 
-    await update.message.reply_text("🧾 Распознаю чек...")
+    amount = None
+    description = None
 
-    raw = read_text(img)
-    text = normalize_text(raw)
+    # Простейший парсер сумм
+    for l in cleaned:
+        if "000" in l or "сум" in l.lower() or "sum" in l.lower():
+            digits = "".join([c for c in l if c.isdigit()])
+            if digits and len(digits) >= 3:
+                amount = int(digits)
+                break
 
-    amount = extract_amount(text)
-    date = extract_date(text)
-    name = extract_name(text)
-    category = categorize(text)
-    description = build_description(text, name)
+    # Описание — первая строка, где нет цифр и не служебная
+    for l in cleaned:
+        if not any(ch.isdigit() for ch in l) and len(l) > 3:
+            description = l
+            break
+
+    return amount, description or "Без описания"
+
+
+async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Основной обработчик фото чека.
+    """
+
+    message = update.message
+    photo = message.photo[-1]
+
+    # загрузка фото
+    file = await photo.get_file()
+    image_bytes = await file.download_as_bytearray()
+
+    await message.reply_text("📄 Распознаю чек...")
+
+    # OCR
+    text = ocr_read(image_bytes)
+
+    if not text.strip():
+        return await message.reply_text("❌ Не удалось прочитать чек.")
+
+    amount, description = parse_ocr_text(text)
 
     if not amount:
-        await update.message.reply_text("❌ Не смог найти сумму в чеке.")
-        return
+        return await message.reply_text("❌ Не смог выделить сумму из чека.")
 
-    msg = (
-        "📄 *Чек распознан!*\n\n"
-        f"💰 Сумма: *{amount:,.0f} сум*\n"
-        f"📂 Категория: *{category}*\n"
-        f"👤 Имя: *{name or '—'}*\n"
-        f"📅 Дата: *{date or '—'}*\n"
-        f"📝 Описание: *{description}*\n\n"
-        "Подтвердить запись?"
+    # красивые кнопки
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Одобрить", callback_data=f"approve|{amount}|{description}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data="reject"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Изменить", callback_data=f"edit|{amount}|{description}")
+        ]
+    ])
+
+    await message.reply_text(
+        f"🧾 *Распознан чек*\n\n"
+        f"💸 *Сумма:* {amount:,} UZS\n"
+        f"📝 *Описание:* {description}\n\n"
+        f"Подтверждаешь?",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
     )
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    save_transaction(
-        user_id=update.effective_user.id,
-        amount=amount,
-        category=category,
-        description=description,
-        tx_date=date
-    )
+# ---- CALLBACK HANDLER ----
+
+async def receipt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data.split("|")
+
+    if data[0] == "reject":
+        return await query.edit_message_text("❌ Операция отменена.")
+
+    if data[0] == "approve":
+        amount = int(data[1])
+        desc = data[2]
+
+        # сохраняем транзакцию
+        save_transaction(
+            user_id=query.from_user.id,
+            data={
+                "type": "expense",
+                "amount": amount,
+                "category": "прочее",
+                "description": desc,
+                "date": None
+            }
+        )
+
+        return await query.edit_message_text(
+            f"✅ Готово!\nЗаписал расход *{amount:,} сум*.\nОписание: _{desc}_",
+            parse_mode="Markdown"
+        )
+
+    if data[0] == "edit":
+        await query.edit_message_text("✏️ Напиши новую сумму и описание в формате:\n\n`50000 такси`",
+                                      parse_mode="Markdown")
