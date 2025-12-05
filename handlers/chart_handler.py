@@ -3,7 +3,7 @@ import io
 import matplotlib.pyplot as plt
 from telegram import InputFile
 from telegram.ext import CommandHandler
-from db import get_session, Transaction
+from services.db import get_session, Transaction
 from datetime import datetime
 
 
