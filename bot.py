@@ -17,7 +17,7 @@ from handlers.day_handler import day_handler
 from handlers.chart_handler import get_chart_handler
 from handlers.history_handler import history_handler
 from handlers.photo_handler import photo_handler
-from handlers.receipt_handler import receipt_handler
+from handlers.receipt_handler import receipt_handler, receipt_callback
 
 # (дальше добавим /day, /chart, AI и др.)
 
@@ -64,6 +64,7 @@ def main():
     app.add_handler(history_handler())
     app.add_handler(photo_handler)
     app.add_handler(MessageHandler(filters.PHOTO, receipt_handler))
+    app.add_handler(CallbackQueryHandler(receipt_callback))
     
     logger.info("Bot is running...")
     app.run_polling()
