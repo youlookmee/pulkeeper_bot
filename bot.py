@@ -3,12 +3,14 @@ import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from config import TELEGRAM_TOKEN
-from services.db import init_db
-from transaction_handler import add_tx_handler, auto_tx_handler
-from report_handler import report_handler
+
+# Handlers
+from handlers.transaction_handler import transaction_handler
+from handlers.report_handler import report_handler
 from handlers.month_handler import month_handler
 
-
+# DB
+from services.db import init_db
 
 # Логи
 logging.basicConfig(level=logging.INFO)
