@@ -4,6 +4,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,   # ← ОБЯЗАТЕЛЬНО!
     filters
 )
 
@@ -18,8 +19,6 @@ from handlers.chart_handler import get_chart_handler
 from handlers.history_handler import history_handler
 from handlers.photo_handler import photo_handler
 from handlers.receipt_handler import receipt_handler, receipt_callback
-
-# (дальше добавим /day, /chart, AI и др.)
 
 # ---- DB ----
 from services.db import init_db
@@ -47,7 +46,7 @@ async def start(update, context):
 def main():
     logger.info("Starting bot...")
 
-    # Инициализация БД (создаёт таблицы при запуске)
+    # Инициализация БД
     init_db()
     logger.info("Database initialized")
 
@@ -55,17 +54,21 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # ---- Регистрируем хендлеры ----
-    app.add_handler(CommandHandler("start", start))     # /start
-    app.add_handler(report_handler)                     # /report
-    app.add_handler(month_handler)                      # /month
-    app.add_handler(day_handler)
-    app.add_handler(transaction_handler)                # авто-парсер суммы
-    app.add_handler(get_chart_handler())
-    app.add_handler(history_handler())
-    app.add_handler(photo_handler)
-    app.add_handler(MessageHandler(filters.PHOTO, receipt_handler))
-    app.add_handler(CallbackQueryHandler(receipt_callback))
+    app.add_handler(CommandHandler("start", start))         # /start
+    app.add_handler(report_handler)                         # /report
+    app.add_handler(month_handler)                          # /month
+    app.add_handler(day_handler)                            # /day
+    app.add_handler(get_chart_handler())                    # /chart
+    app.add_handler(history_handler())                      # /history
     
+    # Фото-чеки
+    app.add_handler(photo_handler)                          # реагирует на "📸 Распознаю чек..."
+    app.add_handler(MessageHandler(filters.PHOTO, receipt_handler))  # загрузка фото чека
+    app.add_handler(CallbackQueryHandler(receipt_callback)) # кнопки: одобрить/отклонить
+
+    # Авто-парсер суммы
+    app.add_handler(transaction_handler)
+
     logger.info("Bot is running...")
     app.run_polling()
 
