@@ -1,115 +1,88 @@
+# handlers/receipt_handler.py
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, MessageHandler, filters
+from telegram.ext import ContextTypes
 
-from utils.ocr import ocr_read
+from utils.ocr import extract_from_receipt
 from services.db import save_transaction
 
-
-def parse_ocr_text(text: str):
-    """
-    Ищем сумму и описание.
-    """
-    lines = text.splitlines()
-    cleaned = [l.strip() for l in lines if l.strip()]
-
-    amount = None
-    description = None
-
-    # Простейший парсер сумм
-    for l in cleaned:
-        if "000" in l or "сум" in l.lower() or "sum" in l.lower():
-            digits = "".join([c for c in l if c.isdigit()])
-            if digits and len(digits) >= 3:
-                amount = int(digits)
-                break
-
-    # Описание — первая строка, где нет цифр и не служебная
-    for l in cleaned:
-        if not any(ch.isdigit() for ch in l) and len(l) > 3:
-            description = l
-            break
-
-    return amount, description or "Без описания"
+logger = logging.getLogger(__name__)
 
 
 async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Основной обработчик фото чека.
-    """
-
+    """Получение фото, OCR → извлечение суммы → вывод карточки подтверждения."""
     message = update.message
-    photo = message.photo[-1]
 
-    # загрузка фото
-    file = await photo.get_file()
-    image_bytes = await file.download_as_bytearray()
+    if not message.photo:
+        return
 
     await message.reply_text("📄 Распознаю чек...")
 
-    # OCR
-    text = ocr_read(image_bytes)
+    # выбираем лучшее качество фото
+    file_id = message.photo[-1].file_id
+    file = await context.bot.get_file(file_id)
 
-    if not text.strip():
+    # скачиваем
+    img_path = "/tmp/receipt.jpg"
+    await file.download_to_drive(img_path)
+
+    # OCR
+    try:
+        import easyocr
+        reader = easyocr.Reader(["ru", "en"], gpu=False)
+        ocr_raw = reader.readtext(img_path, detail=0)
+        ocr_text = "\n".join(ocr_raw)
+    except Exception as e:
+        logger.exception(e)
         return await message.reply_text("❌ Не удалось прочитать чек.")
 
-    amount, description = parse_ocr_text(text)
+    # анализ
+    data = extract_from_receipt(ocr_text)
+
+    amount = data.get("amount")
+    merchant = data.get("merchant") or "Неизвестно"
+    date = data.get("date") or "Не указана"
+    description = data.get("description") or "Без описания"
 
     if not amount:
-        return await message.reply_text("❌ Не смог выделить сумму из чека.")
+        return await message.reply_text("❌ Не получилось определить сумму.")
 
-    # красивые кнопки
+    # кнопки
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"approve|{amount}|{description}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data="reject"),
-        ],
-        [
-            InlineKeyboardButton("✏️ Изменить", callback_data=f"edit|{amount}|{description}")
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve:{amount}:{merchant}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data="decline"),
         ]
     ])
 
-    await message.reply_text(
-        f"🧾 *Распознан чек*\n\n"
-        f"💸 *Сумма:* {amount:,} UZS\n"
-        f"📝 *Описание:* {description}\n\n"
-        f"Подтверждаешь?",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+    text = (
+        f"Новая транзакция\n"
+        f"💸 **Сумма:** {amount} UZS\n"
+        f"🏪 **Мерчант:** {merchant}\n"
+        f"📅 **Дата:** {date}\n"
+        f"📝 **Описание:** {description}"
     )
 
+    await message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
-# ---- CALLBACK HANDLER ----
 
 async def receipt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопок Подтвердить / Отклонить."""
     query = update.callback_query
     await query.answer()
 
-    data = query.data.split("|")
+    data = query.data
 
-    if data[0] == "reject":
-        return await query.edit_message_text("❌ Операция отменена.")
+    if data == "decline":
+        return await query.edit_message_text("❌ Транзакция отклонена.")
 
-    if data[0] == "approve":
-        amount = int(data[1])
-        desc = data[2]
-
-        # сохраняем транзакцию
+    if data.startswith("approve:"):
+        _, amount, merchant = data.split(":")
         save_transaction(
             user_id=query.from_user.id,
-            data={
-                "type": "expense",
-                "amount": amount,
-                "category": "прочее",
-                "description": desc,
-                "date": None
-            }
+            amount=float(amount),
+            category="прочее",
+            description=f"Чек: {merchant}",
+            tx_type="expense",
         )
-
-        return await query.edit_message_text(
-            f"✅ Готово!\nЗаписал расход *{amount:,} сум*.\nОписание: _{desc}_",
-            parse_mode="Markdown"
-        )
-
-    if data[0] == "edit":
-        await query.edit_message_text("✏️ Напиши новую сумму и описание в формате:\n\n`50000 такси`",
-                                      parse_mode="Markdown")
+        return await query.edit_message_text("✅ Транзакция сохранена!")
