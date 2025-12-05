@@ -5,6 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from config import TELEGRAM_TOKEN
 from db import init_db
 from transaction_handler import add_tx_handler, auto_tx_handler
+from report_handler import report_handler
 
 
 # Логи
