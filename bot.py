@@ -54,6 +54,7 @@ def main():
     app.add_handler(CommandHandler("start", start))     # /start
     app.add_handler(report_handler)                     # /report
     app.add_handler(month_handler)                      # /month
+    app.add_handler(day_handler)
     app.add_handler(transaction_handler)                # авто-парсер суммы
 
     logger.info("Bot is running...")
