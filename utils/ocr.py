@@ -1,13 +1,9 @@
 import requests
 
-OCR_API_KEY = "helloworld"  # бесплатный ключ OCR.Space
+OCR_API_KEY = "helloworld"  # тестовый API OCR.Space
 
 
 def ocr_read(image_bytes: bytes) -> str:
-    """
-    Отправляет фото в OCR.Space и возвращает распознанный текст.
-    """
-
     url = "https://api.ocr.space/parse/image"
 
     files = {
