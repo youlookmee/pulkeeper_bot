@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from config import TELEGRAM_TOKEN
 
 # Handlers
-from handlers.transaction_handler import transaction_handler
+from handlers import transaction_handler
 from handlers.report_handler import report_handler
 from handlers.month_handler import month_handler
 
