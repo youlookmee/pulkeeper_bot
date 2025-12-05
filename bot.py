@@ -47,10 +47,10 @@ def main():
     # Команда: /add 20000 кофе
     app.add_handler(add_tx_handler)
 
+    app.add_handler(report_handler)
+
     # Автоматическое распознавание всех сообщений
     app.add_handler(auto_tx_handler)
-
-    app.add_handler(report_handler)
 
     logger.info("Bot is running...")
     app.run_polling()
