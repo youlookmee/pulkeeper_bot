@@ -3,7 +3,7 @@ from utils.ocr import read_text
 from utils.normalizer import normalize_text
 from utils.parser_ml import extract_amount, extract_date, extract_name, build_description
 from utils.categorizer import categorize
-from services.save_transaction import save_transaction
+from handlers.transaction_handler import save_transaction
 
 
 async def receipt_handler(update, context):
