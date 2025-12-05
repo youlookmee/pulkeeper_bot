@@ -6,6 +6,8 @@ from config import TELEGRAM_TOKEN
 from db import init_db
 from transaction_handler import add_tx_handler, auto_tx_handler
 from report_handler import report_handler
+from handlers.month_handler import month_handler
+
 
 
 # Логи
@@ -48,6 +50,8 @@ def main():
     app.add_handler(add_tx_handler)
 
     app.add_handler(report_handler)
+    app.add_handler(month_handler)
+
 
     # Автоматическое распознавание всех сообщений
     app.add_handler(auto_tx_handler)
