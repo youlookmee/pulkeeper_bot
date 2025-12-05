@@ -2,7 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, MessageHandler, filters
 
 from utils.ocr import ocr_read
-from services.save_transaction import save_transaction
+from services.db import save_transaction
 
 
 def parse_ocr_text(text: str):
