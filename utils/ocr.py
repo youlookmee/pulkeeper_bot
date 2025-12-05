@@ -4,7 +4,6 @@ from config import DEEPSEEK_API_KEY
 
 
 def ocr_ai(image_bytes: bytes) -> str:
-    """OCR через DeepSeek Vision"""
     url = "https://api.deepseek.com/v1/chat/completions"
 
     img_b64 = base64.b64encode(image_bytes).decode()
@@ -12,7 +11,7 @@ def ocr_ai(image_bytes: bytes) -> str:
     payload = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "Extract all text from this receipt photo. Return ONLY text, no explanations."},
+            {"role": "system", "content": "Extract all text from this receipt photo. Return ONLY raw text."},
             {"role": "user", "content": [{"type": "input_image", "image_base64": img_b64}]}
         ]
     }
@@ -25,11 +24,9 @@ def ocr_ai(image_bytes: bytes) -> str:
     try:
         r = requests.post(url, json=payload, headers=headers).json()
         return r["choices"][0]["message"]["content"]
-    except Exception as e:
-        print("OCR ERROR:", e)
+    except:
         return ""
 
 
 def read_text(image_bytes: bytes) -> str:
-    """Используем только AI OCR"""
     return ocr_ai(image_bytes)
