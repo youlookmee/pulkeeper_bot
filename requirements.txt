@@ -3,7 +3,6 @@ python-dotenv
 psycopg2-binary
 SQLAlchemy
 requests
-Pillow
 numpy
 pandas
 matplotlib
