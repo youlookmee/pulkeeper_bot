@@ -1,67 +1,43 @@
-from telegram import Update
-from telegram.ext import MessageHandler, filters, ContextTypes
-
-from utils.ocr import extract_from_receipt
-from utils.classify import classify_category, classify_type
-from utils.receipt_parser import extract_amount, extract_items
-from services.db import get_session, Transaction
+# handlers/photo_handler.py
+from telegram.ext import MessageHandler, filters
+from utils.ocr import read_text
+from parser import parse_transaction
+from handlers.transaction_handler import save_transaction
 
 
-async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = await update.message.photo[-1].get_file()
-    img = await file.download_as_bytearray()
+async def photo_handler(update, context):
+    """Обрабатывает фото чека"""
+    message = update.message
 
-    await update.message.reply_text("📄 Распознаю чек...")
+    photo = message.photo[-1]
+    file = await photo.get_file()
+    image_bytes = await file.download_as_bytearray()
 
-    ocr = extract_from_receipt(img)
+    await message.reply_text("📄 Распознаю чек...")
 
-    if not ocr:
-        await update.message.reply_text("❌ Не удалось прочитать чек.")
+    # OCR (DeepSeek)
+    text = read_text(image_bytes)
+
+    if not text:
+        await message.reply_text("❌ Не удалось прочитать чек.")
         return
 
-    raw = ocr.get("raw_text", "")
-    total = ocr.get("total") or extract_amount(raw)
-    items = ocr.get("items") or extract_items(raw)
-    date = ocr.get("date")
+    # Парсинг текста чека
+    data = parse_transaction(text)
 
-    category = classify_category(raw)
-    tx_type = classify_type(raw)
-
-    if not total:
-        await update.message.reply_text(
-            f"Чек распознан, но сумму определить не удалось:\n\n{raw}"
-        )
+    if not data:
+        await message.reply_text("❌ Не получилось определить сумму.")
         return
 
-    # ---- сохраняем чек в БД ----
-    session = get_session()
+    # Сохранение транзакции
+    save_transaction(message.from_user.id, data)
 
-    tx = Transaction(
-        user_id=update.message.from_user.id,
-        type=tx_type,
-        amount=total,
-        category=category,
-        description="Чек: " + (items[0][0] if items else "без позиций"),
-        image=img,     # сохраняем фото!
-        tx_date=date
+    await message.reply_text(
+        f"✅ Распознано!\n"
+        f"Сумма: {data['amount']}\n"
+        f"Категория: {data['category']}\n"
+        f"Описание: {data['description']}"
     )
 
-    session.add(tx)
-    session.commit()
-    session.close()
 
-    # ---- создаём красивый ответ ----
-    msg = f"✅ Чек записан!\n\n" \
-          f"💵 Сумма: {total:,}\n" \
-          f"📂 Категория: {category}\n" \
-          f"📊 Тип: {tx_type}\n"
-
-    if items:
-        msg += "\n🛒 Позиции:\n"
-        for name, price in items:
-            msg += f"• {name} — {price:,}\n"
-
-    await update.message.reply_text(msg)
-
-
-photo_handler = MessageHandler(filters.PHOTO, handle_receipt)
+photo_handler = MessageHandler(filters.PHOTO, photo_handler)
