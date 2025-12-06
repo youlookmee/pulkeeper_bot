@@ -17,7 +17,11 @@ from handlers.month_handler import month_handler
 from handlers.day_handler import day_handler
 from handlers.chart_handler import get_chart_handler
 from handlers.history_handler import history_handler
-from handlers.photo_handler import photo_handler, receipt_callback_handler, receipt_edit_handler
+
+# Фото + OCR-карточка
+from handlers.photo_handler import photo_handler
+
+# Подтверждение (Одобрить / Отклонить / Изменить)
 from handlers.receipt_handler import receipt_callback
 
 # ---- DB ----
@@ -61,15 +65,16 @@ def main():
     app.add_handler(day_handler)
     app.add_handler(history_handler())
     app.add_handler(get_chart_handler())
+
+    # ---- Фото чеков (OCR) ----
     app.add_handler(photo_handler)
-    app.add_handler(receipt_callback_handler)
-    app.add_handler(receipt_edit_handler)
 
-        # ---- Подтверждение Одобрить / Отклонить ----
-    app.add_handler(CallbackQueryHandler(receipt_callback))
-
-    # ---- Авто-парсинг текста транзакций ----
+    # ---- Авто-парсинг текста (ручные транзакции) ----
     app.add_handler(transaction_handler)
+
+    # ---- Кнопки Одобрить / Отклонить / Изменить ----
+    # (всегда ставится ПОСЛЕ всех MessageHandler)
+    app.add_handler(CallbackQueryHandler(receipt_callback))
 
     logger.info("Bot is running...")
     app.run_polling()
