@@ -1,165 +1,202 @@
 # utils/ocr.py
-from openai import OpenAI
-import base64
-import json
 import os
+import base64
 import re
-from datetime import datetime
+import json
+import logging
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Вспомогательная функция — извлечь "текст" из ответа Responses API
+def _extract_text_from_response(resp):
+    # New SDK often exposes .output_text, но делаем защитно
+    if hasattr(resp, "output_text") and resp.output_text:
+        return resp.output_text
 
-def extract_from_image(image_bytes: bytes):
-    """
-    Ультра-надёжный OCR через GPT-4o mini Vision.
-    Всегда возвращает корректный JSON:
-    {
-        "amount": float,
-        "category": str,
-        "description": str,
-        "date": str
-    }
-    """
+    # Собираем текст из output[].content[]
+    parts = []
+    out = getattr(resp, "output", None)
+    if out:
+        for item in out:
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+            if not content:
+                continue
+            # content может быть список блоков
+            if isinstance(content, list):
+                for block in content:
+                    t = block.get("text") or block.get("content") or block.get("payload") or None
+                    if isinstance(t, str):
+                        parts.append(t)
+                    elif isinstance(block.get("type"), str) and block.get("type") == "output_text":
+                        # fallback
+                        txt = block.get("text") or block.get("value") or ""
+                        if txt:
+                            parts.append(txt)
+            elif isinstance(content, str):
+                parts.append(content)
 
-    # Кодируем картинку
-    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return "\n".join(parts).strip()
 
-    system_prompt = """
-Ты — профессиональный OCR ассистент для финансовых чеков (UZCARD/HUMO/терминальные чеки).
 
-Твоя задача — понять точные данные о транзакции.
-
-СТРОГО верни JSON, БЕЗ ТЕКСТА вокруг:
-
-{
-  "amount": 0,
-  "category": "",
-  "description": "",
-  "date": ""
-}
-
-ПРАВИЛА:
-
-1) СУММА:
-   - Найди самое крупное число на чеке.
-   - Учитывай варианты с пробелами: 7 000 000, 7.000.000, 7000000, 7 000 000.00
-   - Верни только цифры, как число (int / float).
-
-2) КАТЕГОРИЯ (выбери ОДНУ):
-   - "еда", "развлечения", "покупки", "транспорт", "прочее", "другое".
-   - Если нет магазина, ресторана, бензиновой станции → выбери "прочее".
-
-3) DESCRIPTION:
-   - Кратко опиши смысл платежа: например, "платеж", "перевод", "оплата по карте".
-   - НЕ пиши длинный текст.
-
-4) DATE:
-   - Форматы поиска: DD.MM.YYYY, YYYY-MM-DD, DD-MM-YYYY.
-   - Если есть время, игнорируй.
-   - Если нет даты — верни "".
-
-Верни только JSON. 
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "Извлеки данные с этого чека."},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{encoded}"
-                    }
-                ]
-            }
-        ]
-    )
-
-    raw = response.choices[0].message.content.strip()
-    print("\n--- RAW GPT OCR ---\n", raw, "\n-------------------\n")
-
-    # --- Пытаемся найти JSON ---
+def _clean_number_str(s: str) -> float:
+    """Преобразует строку с пробелами/точками/запятыми в число."""
+    if not s:
+        return 0.0
+    # удалить все не-цифры кроме точек и запятых
+    # сначала заменим запятую на точку, но если внутри есть пробелы — удалим
+    s = s.strip()
+    s = s.replace("\u00A0", " ")  # nbsp
+    # Удаляем всё кроме цифр, пробела, точки, запятой
+    s = re.sub(r"[^\d\.,\s]", "", s)
+    # Если есть и точка и запятая — считаем что точка дробная, запятая — разделитель тысяч -> удалить запятые
+    if "," in s and "." in s:
+        s = s.replace(",", "")
+    # Если имеются пробелы как разделитель тысяч — удаляем
+    s = s.replace(" ", "")
+    s = s.replace(",", ".")
     try:
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if not json_match:
-            raise ValueError("GPT did not return JSON")
+        return float(s)
+    except:
+        # как fallback — возьмём только цифры
+        digits = re.sub(r"\D", "", s)
+        if digits:
+            return float(digits)
+        return 0.0
 
-        data = json.loads(json_match.group(0))
 
-    except Exception as e:
-        print("OCR JSON ERROR:", e)
+def extract_from_image(image_bytes: bytes, model: str = "gpt-4o-mini"):
+    """
+    Надёжный OCR через GPT-4o mini Vision (Responses API).
+    Возвращает dict:
+    {
+      "amount": float,
+      "category": str,
+      "description": str,
+      "date": str
+    }
+    Или None при ошибке.
+    """
+
+    # Убедимся что ключ задан
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.error("OPENAI_API_KEY not set in environment")
         return None
 
-    # -----------------------------
-    # ДОПОЛНИТЕЛЬНАЯ ОБРАБОТКА
-    # -----------------------------
+    try:
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{encoded}"
 
-    # 1) Сумма — если GPT дал криво, вытаскиваем вручную из всего raw текста
-    amount = data.get("amount")
-    if not amount or float(amount) <= 0:
+        system_prompt = (
+            "Ты — профессиональный OCR ассистент для финансовых чеков. "
+            "Верни ТОЛЬКО JSON в формате:\n"
+            '{ "amount": 0, "category": "", "description": "", "date": "" }\n\n'
+            "Правила:\n"
+            "- amount: самое крупное число на чеке в UZS (верни число без разделителей в виде числа).\n"
+            "- category: один из [еда, развлечения, покупки, транспорт, прочее, другое].\n"
+            "- description: кратко (1-5 слов) о назначении платежа.\n"
+            "- date: DD.MM.YYYY или пустая строка.\n"
+            "Никакого лишнего текста — только JSON."
+        )
 
-        numbers = re.findall(r"\d[\d\s.,]*", raw)  # ищем все числа
-        cleaned = []
+        user_inputs = [
+            {"type": "input_text", "text": "Извлеки данные с этого чека и верни JSON"},
+            {"type": "input_image", "image_url": data_url}
+        ]
 
-        for n in numbers:
-            nn = n.replace(" ", "").replace(",", "").replace(".", "")
-            if nn.isdigit():
-                cleaned.append(int(nn))
+        # Requests via Responses API
+        resp = client.responses.create(
+            model=model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_inputs}
+            ],
+            # Маленькие таймауты можно задать, но обычно на стороне SDK.
+        )
 
-        if cleaned:
-            data["amount"] = max(cleaned)
-        else:
-            data["amount"] = 0
+        raw_text = _extract_text_from_response(resp)
+        logger.info("OCR raw from model:\n%s", raw_text)
 
-    # 2) Категория — защита от мусора
-    allowed_categories = ["еда", "развлечения", "покупки", "транспорт", "прочее", "другое"]
-    if data.get("category") not in allowed_categories:
-        data["category"] = "прочее"
+        if not raw_text:
+            logger.warning("OCR: model returned empty text")
+            return None
 
-    # 3) Description — fallback
-    if not data.get("description"):
-        data["description"] = "платеж"
+        # Найдём JSON в любом месте ответа
+        m = re.search(r"\{[\s\S]*\}", raw_text)
+        if not m:
+            # Иногда модель может вернуть валидный YAML / ключ: значение — попытаемся извлечь числа
+            logger.warning("OCR: JSON not found in model response")
+            # fallback: искать числа в raw_text
+            numbers = re.findall(r"[\d][\d\s\.,]{2,}", raw_text)
+            amount = 0.0
+            if numbers:
+                # преобразуем и возьмём максимум
+                cleaned = []
+                for n in numbers:
+                    try:
+                        val = _clean_number_str(n)
+                        cleaned.append(val)
+                    except:
+                        continue
+                if cleaned:
+                    amount = max(cleaned)
+            return {
+                "amount": float(amount),
+                "category": "прочее",
+                "description": "",
+                "date": ""
+            }
 
-    # 4) Дата — проверка и исправление
-    date_str = data.get("date", "")
-    extracted_date = None
+        json_text = m.group(0)
 
-    patterns = [
-        r"\d{4}-\d{2}-\d{2}",   # YYYY-MM-DD
-        r"\d{2}\.\d{2}\.\d{4}", # DD.MM.YYYY
-        r"\d{2}-\d{2}-\d{4}",   # DD-MM-YYYY
-    ]
-
-    for p in patterns:
-        match = re.search(p, raw)
-        if match:
-            extracted_date = match.group(0)
-            break
-
-    # если нашли — конвертируем в формат YYYY-MM-DD
-    if extracted_date:
         try:
-            if "." in extracted_date:
-                extracted_date = datetime.strptime(extracted_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            elif "-" in extracted_date and extracted_date.count("-") == 2:
-                if extracted_date[4] == "-":  # YYYY-MM-DD
-                    pass
-                else:  # DD-MM-YYYY
-                    extracted_date = datetime.strptime(extracted_date, "%d-%m-%Y").strftime("%Y-%m-%d")
+            parsed = json.loads(json_text)
+        except Exception as e:
+            logger.exception("OCR: failed to parse JSON, trying minor fixes: %s", e)
+            # попытка убрать одиночные кавычки
+            try:
+                fixed = json_text.replace("'", "\"")
+                parsed = json.loads(fixed)
+            except Exception as e2:
+                logger.exception("OCR: still failed to parse JSON: %s", e2)
+                return None
+
+        # Нормализуем поля
+        amount = parsed.get("amount", 0) or 0
+        try:
+            amount = float(amount)
         except:
-            pass
+            # если строка - попробуем извлечь число
+            amount = _clean_number_str(str(amount))
 
-        data["date"] = extracted_date
-    else:
-        data["date"] = ""
+        category = parsed.get("category") or "прочее"
+        description = parsed.get("description") or ""
+        date = parsed.get("date") or ""
 
-    # --- ГАРАНТИРОВАННЫЙ ВОЗВРАТ ---
-    return {
-        "amount": float(data.get("amount", 0)),
-        "category": data.get("category", "прочее"),
-        "description": data.get("description", "платеж"),
-        "date": data.get("date", "")
-    }
+        # safety: если сумма нулевая — попытаемся извлечь из raw_text все числа и взять максимум
+        if not amount or amount <= 0:
+            numbers = re.findall(r"[\d][\d\s\.,]{2,}", raw_text)
+            cleaned = []
+            for n in numbers:
+                val = _clean_number_str(n)
+                if val:
+                    cleaned.append(val)
+            if cleaned:
+                amount = max(cleaned)
+
+        result = {
+            "amount": float(amount),
+            "category": category,
+            "description": description,
+            "date": date
+        }
+
+        logger.info("OCR result normalized: %s", result)
+        return result
+
+    except Exception as exc:
+        logger.exception("OCR failed: %s", exc)
+        return None
