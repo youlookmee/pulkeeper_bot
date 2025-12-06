@@ -1,14 +1,16 @@
 # handlers/photo_handler.py
-from telegram.ext import MessageHandler, filters, CallbackQueryHandler
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+import uuid
+import asyncio
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import MessageHandler, filters
 from utils.ocr import extract_from_image
-from services.db import save_transaction
-import json
 
 
 async def photo_handler(update, context):
-    """Обрабатывает фото чека → OCR → показывает карточку."""
+    """Обрабатывает фото чека — отправляет карточку с кнопками Одобрить/Отклонить/Изменить"""
     message = update.message
+    if not message.photo:
+        return
 
     photo = message.photo[-1]
     file = await photo.get_file()
@@ -16,39 +18,39 @@ async def photo_handler(update, context):
 
     await message.reply_text("📄 Распознаю чек через AI...")
 
-    data = extract_from_image(image_bytes)
+    # вызываем OCR (может быть долгим)
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, extract_from_image, bytes(image_bytes))
 
     if not data:
-        await message.reply_text("❌ Не удалось определить данные с чека.")
+        await message.reply_text("❌ Не удалось прочитать чек.")
         return
 
-    # Сохраняем временно результат в context.user_data для callback
-    context.user_data["pending_receipt"] = data
+     # уникальный ключ для хранения данных в user_data
+    uid = str(uuid.uuid4())
+    # храним под uid
+    context.user_data[uid] = data
 
+    # Формируем текст карточки
     text = (
-        "🧾 <b>Новая транзакция</b>\n\n"
-        f"💸 <b>Сумма:</b> {int(data['amount']):,} UZS\n"
-        f"🏷 <b>Категория:</b> {data['category']}\n"
-        f"📝 <b>Описание:</b> {data['description']}\n"
-        f"📅 <b>Дата:</b> {data['date'] or '—'}\n"
-    ).replace(",", " ")
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Одобрить", callback_data="receipt_approve"),
-            InlineKeyboardButton("❌ Отклонить", callback_data="receipt_decline")
-        ],
-        [
-            InlineKeyboardButton("✏ Изменить", callback_data="receipt_edit")
-        ]
-    ]
-
-    await message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
+        "🆕 Новая транзакция\n\n"
+        f"💸 Сумма: {int(data['amount']) if float(data['amount']).is_integer() else data['amount']} UZS\n"
+        f"📂 Категория: {data.get('category', 'прочее')}\n"
+        f"📝 Описание: {data.get('description','')}\n"
+        f"📅 Дата: {data.get('date','')}\n"
     )
 
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{uid}"),
+         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{uid}")],
+        [InlineKeyboardButton("✏️ Изменить", callback_data=f"edit:{uid}")]
+    ])
+
+    await message.reply_photo(
+        photo=await photo.get_file().download_as_bytearray(),  # просто повторно отправим ту же картинку
+        caption=text,
+        reply_markup=keyboard
+    )
 
 async def receipt_callback(update, context):
     """Обрабатывает кнопки: Одобрить / Отклонить / Изменить"""
