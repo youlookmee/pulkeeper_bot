@@ -14,14 +14,14 @@ from services.save_transaction import save_transaction
 async def photo_handler(update, context):
     """Обрабатывает фото → OCR → карточка с кнопками."""
     message = update.message
-    photo = message.photo[-1]
+    photo = message.photo[-1]  # последнее фото — самое большое
 
     await message.reply_text("📄 Распознаю чек через AI...")
 
     file = await photo.get_file()
     image_bytes = await file.download_as_bytearray()
 
-    # долгое OCR — выносим в executor
+    # OCR — через executor (долго)
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, extract_from_image, bytes(image_bytes))
 
@@ -29,11 +29,10 @@ async def photo_handler(update, context):
         await message.reply_text("❌ Не удалось прочитать чек.")
         return
 
-    # Uid для данных
+    # UID для временного хранения
     uid = str(uuid.uuid4())
     context.user_data[uid] = data
 
-    # Текст карточки
     amount = data["amount"]
     amount_txt = int(amount) if float(amount).is_integer() else amount
 
@@ -53,8 +52,9 @@ async def photo_handler(update, context):
         [InlineKeyboardButton("✏ Изменить", callback_data=f"edit:{uid}")]
     ])
 
+    # ❗ САМОЕ ВАЖНОЕ — используем file_id, а НЕ bytes.
     await message.reply_photo(
-        photo=image_bytes,
+        photo=photo.file_id,
         caption=caption,
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -69,19 +69,22 @@ async def receipt_callback(update, context):
     query = update.callback_query
     await query.answer()
 
-    raw = query.data.split(":")
-    action, uid = raw[0], raw[1]
+    try:
+        action, uid = query.data.split(":")
+    except:
+        await query.edit_message_text("❌ Ошибка callback данных.")
+        return
 
     data = context.user_data.get(uid)
     if not data:
-        await query.edit_message_text("❌ Ошибка: данные не найдены.")
+        await query.edit_message_text("❌ Данные транзакции устарели.")
         return
 
     # ---- ОДОБРИТЬ ----
     if action == "approve":
         save_transaction(
-            user_id=query.from_user.id,
-            data={
+            query.from_user.id,
+            {
                 "type": "expense",
                 "amount": data["amount"],
                 "category": data["category"],
@@ -102,37 +105,34 @@ async def receipt_callback(update, context):
     # ---- ИЗМЕНИТЬ ----
     elif action == "edit":
         context.user_data["edit_uid"] = uid
-
         await query.edit_message_text(
             "✏ <b>Редактирование</b>\n\n"
-            "Отправьте данные в формате:\n"
-            "<code>сумма; категория; описание</code>\n\n"
-            "Пример:\n<code>7000000; прочее; перевод</code>",
+            "Введите новые данные в формате:\n"
+            "<code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
         return
 
 
 # ===============================================================
-# 3) ПОЛЬЗОВАТЕЛЬ ВВОДИТ ИЗМЕНЁННЫЕ ДАННЫЕ
+# 3) РЕДАКТИРОВАНИЕ ПОЛЬЗОВАТЕЛЕМ
 # ===============================================================
 async def receipt_edit_message(update, context):
-    """Получает сообщение с исправленными данными."""
     uid = context.user_data.get("edit_uid")
     if not uid:
-        return
+        return  # не в режиме редактирования
 
     text = update.message.text.strip()
     parts = [p.strip() for p in text.split(";")]
 
     if len(parts) != 3:
-        await update.message.reply_text("❌ Формат неверный.\nПравильно: 7000000; прочее; перевод")
+        await update.message.reply_text("❌ Формат неверный.\nПример: 7000000; прочее; перевод")
         return
 
-    amount, category, description = parts
+    amount_raw, category, description = parts
 
     try:
-        amount = float(amount)
+        amount = float(amount_raw)
     except:
         await update.message.reply_text("❌ Ошибка суммы.")
         return
@@ -147,18 +147,18 @@ async def receipt_edit_message(update, context):
     data["category"] = category
     data["description"] = description
 
-    # сохраняем в БД
+    # сохраняем
     save_transaction(update.message.from_user.id, data)
 
-    # чистим временные данные
+    # удаляем временные данные
     context.user_data.pop(uid, None)
     context.user_data.pop("edit_uid", None)
 
-    await update.message.reply_text("✅ Транзакция успешно обновлена и сохранена!")
+    await update.message.reply_text("✅ Транзакция обновлена и сохранена!")
 
 
 # ===============================================================
-# 4) ЭКСПОРТ ХЕНДЛЕРОВ ДЛЯ BOT.PY
+# 4) ЭКСПОРТ ХЕНДЛЕРОВ
 # ===============================================================
 photo_handler = MessageHandler(filters.PHOTO, photo_handler)
 receipt_callback_handler = CallbackQueryHandler(receipt_callback)
