@@ -36,30 +36,23 @@ async def safe_edit(query, text, parse_mode=None):
 # 2) ОБРАБОТКА КНОПОК approve / reject / edit
 # ===============================================================
 async def receipt_callback(update, context):
-    """Обрабатывает кнопки Одобрить / Отклонить / Изменить."""
     query = update.callback_query
     await query.answer()
 
-    # Разбираем callback_data
     try:
         action, uid = query.data.split(":")
     except:
-        await safe_edit(query, "❌ Ошибка callback.")
+        await safe_edit(query, "❌ Ошибка callback данных.")
         return
 
-    # Достаём данные
     data = context.user_data.get(uid)
     if not data:
-        await safe_edit(query, "❌ Данные транзакции устарели или были удалены.")
+        await safe_edit(query, "❌ Данные транзакции устарели или отсутствуют.")
         return
 
-    # ===============================================================
-    # ОДОБРИТЬ ТРАНЗАКЦИЮ
-    # ===============================================================
+    # --- ОДОБРИТЬ ---
     if action == "approve":
-
-        # сохраняем транзакцию
-        save_transaction(
+        tx_id = save_transaction(
             user_id=query.from_user.id,
             amount=data["amount"],
             category=data["category"],
@@ -68,46 +61,32 @@ async def receipt_callback(update, context):
             date=data.get("date")
         )
 
-        # удаляем временные данные
         context.user_data.pop(uid, None)
-
-        # получаем статистику пользователя
-        stats = get_user_stats(query.from_user.id)
-
-        text = (
-            "✅ Обработка завершена\n\n"
-            f"💸 Расходы: {stats['expense']:,} UZS\n"
-            f"💰 Доходы: {stats['income']:,} UZS\n"
-            f"🧾 Транзакции: {stats['count']}\n"
-            f"💼 Баланс: {stats['balance']:,} UZS\n\n"
-            "💰 *Посмотреть баланс*"
-        )
-
-        await safe_edit(query, text, parse_mode="Markdown")
-        return
-
-    # ===============================================================
-    # ОТКЛОНИТЬ ТРАНЗАКЦИЮ
-    # ===============================================================
-    if action == "reject":
-        context.user_data.pop(uid, None)
-        await safe_edit(query, "🚫 Транзакция отменена.")
-        return
-
-    # ===============================================================
-    # РЕДАКТИРОВАТЬ ТРАНЗАКЦИЮ
-    # ===============================================================
-    if action == "edit":
-        context.user_data["edit_uid"] = uid
 
         await safe_edit(
             query,
-            "✏ <b>Редактирование транзакции</b>\n\n"
-            "Введите новую строку в формате:\n"
+            f"✅ Транзакция успешно сохранена!\n\n🆔 ID: {tx_id}"
+        )
+        return
+
+    # --- ОТКЛОНИТЬ ---
+    if action == "reject":
+        context.user_data.pop(uid, None)
+        await safe_edit(query, "🚫 Транзакция отклонена.")
+        return
+
+    # --- ИЗМЕНИТЬ ---
+    if action == "edit":
+        context.user_data["edit_uid"] = uid
+        await safe_edit(
+            query,
+            "✏ <b>Редактирование</b>\n\n"
+            "Введите новые данные:\n"
             "<code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
         return
+
 
 
 # ===============================================================
