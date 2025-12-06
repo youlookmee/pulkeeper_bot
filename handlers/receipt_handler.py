@@ -53,12 +53,12 @@ async def receipt_callback(update, context):
     # --- ОДОБРИТЬ ---
     if action == "approve":
         tx_id = save_transaction(
-            user_id=query.from_user.id,
-            amount=data["amount"],
-            category=data["category"],
-            tx_type="expense",
-            description=data["description"],
-            date=data.get("date")
+            query.from_user.id,
+            data["amount"],
+            data["category"],
+            "expense",
+            data["description"],
+            data.get("date")
         )
 
         context.user_data.pop(uid, None)
