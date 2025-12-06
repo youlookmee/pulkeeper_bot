@@ -1,0 +1,9 @@
+python-telegram-bot==20.7
+python-dotenv
+psycopg2-binary
+SQLAlchemy
+openai>=1.55.0
+Pillow
+fastapi
+uvicorn
+requests
