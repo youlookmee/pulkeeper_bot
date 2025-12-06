@@ -1,81 +1,62 @@
 # handlers/receipt_handler.py
 import asyncio
-import uuid
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import CallbackQueryHandler
 
 from services.save_transaction import save_transaction
 
 
-# Хранилище данных по UID (если нет Redis)
-TEMP_RECEIPTS = {}
-
-
 # ===============================================================
-#   1) ПОКАЗ КАРТОЧКИ ПОСЛЕ OCR  (если надо вызвать отдельно)
+# 1) Универсальная безопасная функция редактирования сообщений
 # ===============================================================
-async def show_receipt_card(update, context):
-    """Показывает UI-карточку транзакции (используется при необходимости)."""
-
-    data = context.user_data.get("receipt_data")
-    message = update.message
-
-    if not data:
-        await message.reply_text("❌ Ошибка: данные чека не найдены.")
+async def safe_edit(query, text, parse_mode=None):
+    """
+    Безопасно редактирует сообщение:
+      • сначала edit_message_text
+      • если сообщение — фото → edit_message_caption
+      • если не получилось → отправляет новое сообщение
+    """
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode)
         return
+    except:
+        pass
 
-    uid = str(uuid.uuid4())
-    TEMP_RECEIPTS[uid] = data
+    try:
+        await query.edit_message_caption(text, parse_mode=parse_mode)
+        return
+    except:
+        pass
 
-    caption = (
-        "🧾 *Новая транзакция*\n\n"
-        f"💸 *Сумма:* {data['amount']:,} UZS\n"
-        f"🏷 *Категория:* {data['category']}\n"
-        f"📝 *Описание:* {data['description']}\n"
-        f"📅 *Дата:* {data.get('date', '')}\n"
-    )
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✔ Одобрить", callback_data=f"approve:{uid}"),
-            InlineKeyboardButton("✖ Отклонить", callback_data=f"reject:{uid}")
-        ],
-        [
-            InlineKeyboardButton("✏ Изменить", callback_data=f"edit:{uid}")
-        ]
-    ])
-
-    await message.reply_markdown(caption, reply_markup=keyboard)
+    await query.message.reply_text(text, parse_mode=parse_mode)
 
 
 # ===============================================================
-#   2) ОБРАБОТКА КНОПОК: approve / reject / edit
+# 2) ОБРАБОТКА КНОПОК approve / reject / edit
 # ===============================================================
 async def receipt_callback(update, context):
-    """Обрабатывает кнопки."""
+    """Обрабатывает кнопки: Одобрить / Отклонить / Изменить."""
     query = update.callback_query
     await query.answer()
 
     try:
         action, uid = query.data.split(":")
     except:
-        await query.edit_message_text("❌ Ошибка данных кнопки.")
+        await safe_edit(query, "❌ Ошибка callback данных.")
         return
 
-    data = TEMP_RECEIPTS.get(uid)
+    data = context.user_data.get(uid)
     if not data:
-        await query.edit_message_text("❌ Данные транзакции не найдены.")
+        await safe_edit(query, "❌ Данные транзакции устарели или были удалены.")
         return
 
-    # ✔ ОДОБРЕНИЕ
+    # -----------------------------------------
+    # ОДОБРИТЬ
+    # -----------------------------------------
     if action == "approve":
-        loop = asyncio.get_running_loop()
-
-        await loop.run_in_executor(
-            None,
-            save_transaction,
-            query.from_user.id,
-            {
+        save_transaction(
+            user_id=query.from_user.id,
+            data={
                 "type": "expense",
                 "amount": data["amount"],
                 "category": data["category"],
@@ -83,24 +64,29 @@ async def receipt_callback(update, context):
                 "date": data.get("date")
             }
         )
+        context.user_data.pop(uid, None)
 
-        TEMP_RECEIPTS.pop(uid, None)
-        await query.edit_message_text("✅ Транзакция успешно сохранена!")
+        await safe_edit(query, "✅ Транзакция успешно сохранена!")
         return
 
-    # ❌ ОТКЛОНЕНИЕ
-    elif action == "reject":
-        TEMP_RECEIPTS.pop(uid, None)
-        await query.edit_message_text("🚫 Транзакция отклонена.")
+    # -----------------------------------------
+    # ОТКЛОНИТЬ
+    # -----------------------------------------
+    if action == "reject":
+        context.user_data.pop(uid, None)
+        await safe_edit(query, "🚫 Транзакция отменена.")
         return
 
-    # ✏ РЕДАКТИРОВАНИЕ
-    elif action == "edit":
+    # -----------------------------------------
+    # ИЗМЕНИТЬ
+    # -----------------------------------------
+    if action == "edit":
         context.user_data["edit_uid"] = uid
 
-        await query.edit_message_text(
-            "✏ <b>Редактирование</b>\n\n"
-            "Отправьте исправленные данные в формате:\n"
+        await safe_edit(
+            query,
+            "✏ <b>Редактирование транзакции</b>\n\n"
+            "Введите новую строку в формате:\n"
             "<code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
@@ -108,54 +94,56 @@ async def receipt_callback(update, context):
 
 
 # ===============================================================
-#   3) ПРИЁМ НОВЫХ ДАННЫХ ОТ ПОЛЬЗОВАТЕЛЯ
+# 3) ПОЛЬЗОВАТЕЛЬ ОТПРАВЛЯЕТ ОТРЕДАКТИРОВАННУЮ СТРОКУ
 # ===============================================================
 async def receipt_edit_message(update, context):
-    """Обрабатывает сообщение вида: 7000000; категория; описание"""
-
     uid = context.user_data.get("edit_uid")
     if not uid:
-        return  # пользователь писал не в режиме редактирования
+        return  # пользователь не в режиме редактирования
 
     text = update.message.text.strip()
     parts = [p.strip() for p in text.split(";")]
 
+    # Проверяем формат
     if len(parts) != 3:
         await update.message.reply_text(
-            "❌ Неверный формат.\nПример:\n<code>7000000; прочее; перевод</code>",
+            "❌ Неверный формат!\n"
+            "Правильно: <code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
         return
 
-    amount, category, description = parts
+    amount_raw, category, description = parts
 
+    # валидируем сумму
     try:
-        amount = float(amount)
+        amount = float(amount_raw)
     except:
-        await update.message.reply_text("❌ Сумма должна быть числом.")
+        await update.message.reply_text("❌ Ошибка: сумма должна быть числом.")
         return
 
-    data = TEMP_RECEIPTS.get(uid)
+    data = context.user_data.get(uid)
     if not data:
-        await update.message.reply_text("❌ Данные транзакции не найдены.")
+        await update.message.reply_text("❌ Ошибка: данные не найдены.")
         return
 
-    # Обновляем
+    # обновляем данные
     data["amount"] = amount
     data["category"] = category
     data["description"] = description
 
-    # Сохраняем
+    # сохраняем
     save_transaction(update.message.from_user.id, data)
 
-    TEMP_RECEIPTS.pop(uid, None)
+    # очищаем временные данные
+    context.user_data.pop(uid, None)
     context.user_data.pop("edit_uid", None)
 
     await update.message.reply_text("✅ Транзакция обновлена и сохранена!")
 
 
 # ===============================================================
-#   4) РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ДЛЯ BOT.PY
+# 4) РЕГИСТРАЦИЯ ХЕНДЛЕРОВ
 # ===============================================================
-receipt_callback_handler = CallbackQueryHandler(receipt_callback)
-receipt_edit_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_edit_message)
+def receipt_handler_register(app):
+    app.add_handler(CallbackQueryHandler(receipt_callback))
