@@ -9,19 +9,43 @@ from services.save_transaction import save_transaction
 
 
 # ===============================================================
+#  Универсальная функция безопасного редактирования сообщений
+# ===============================================================
+async def safe_edit(query, text, parse_mode=None):
+    """
+    Безопасно редактирует сообщение (caption или text).
+    Исключает Telegram BadRequest: "no text in message to edit".
+    """
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode)
+        return
+    except:
+        pass
+
+    try:
+        await query.edit_message_caption(text, parse_mode=parse_mode)
+        return
+    except:
+        pass
+
+    # если ничего не получилось, отправляем новое сообщение
+    await query.message.reply_text(text, parse_mode=parse_mode)
+
+
+# ===============================================================
 # 1) ОБРАБОТКА ФОТО
 # ===============================================================
 async def photo_handler(update, context):
     """Обрабатывает фото → OCR → карточка с кнопками."""
     message = update.message
-    photo = message.photo[-1]  # последнее фото — самое большое
+    photo = message.photo[-1]  # лучшее качество
 
     await message.reply_text("📄 Распознаю чек через AI...")
 
     file = await photo.get_file()
     image_bytes = await file.download_as_bytearray()
 
-    # OCR — через executor (долго)
+    # OCR — выносим, чтобы не блокировать Telegram поток
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, extract_from_image, bytes(image_bytes))
 
@@ -29,7 +53,7 @@ async def photo_handler(update, context):
         await message.reply_text("❌ Не удалось прочитать чек.")
         return
 
-    # UID для временного хранения
+    # UID для хранения данных
     uid = str(uuid.uuid4())
     context.user_data[uid] = data
 
@@ -52,7 +76,7 @@ async def photo_handler(update, context):
         [InlineKeyboardButton("✏ Изменить", callback_data=f"edit:{uid}")]
     ])
 
-    # ❗ САМОЕ ВАЖНОЕ — используем file_id, а НЕ bytes.
+    # ВАЖНО: отправляем фото через file_id — так Telegram позволяет редактировать caption
     await message.reply_photo(
         photo=photo.file_id,
         caption=caption,
@@ -65,22 +89,21 @@ async def photo_handler(update, context):
 # 2) ОБРАБОТКА КНОПОК
 # ===============================================================
 async def receipt_callback(update, context):
-    """Одобрить / Отклонить / Изменить."""
     query = update.callback_query
     await query.answer()
 
     try:
         action, uid = query.data.split(":")
     except:
-        await query.edit_message_text("❌ Ошибка callback данных.")
+        await safe_edit(query, "❌ Ошибка callback данных.")
         return
 
     data = context.user_data.get(uid)
     if not data:
-        await query.edit_message_text("❌ Данные транзакции устарели.")
+        await safe_edit(query, "❌ Данные транзакции устарели или отсутствуют.")
         return
 
-    # ---- ОДОБРИТЬ ----
+    # ===== ОДОБРИТЬ =====
     if action == "approve":
         save_transaction(
             query.from_user.id,
@@ -93,21 +116,24 @@ async def receipt_callback(update, context):
             }
         )
         context.user_data.pop(uid, None)
-        await query.edit_message_text("✅ Транзакция успешно сохранена!")
+
+        await safe_edit(query, "✅ Транзакция успешно сохранена!")
         return
 
-    # ---- ОТКЛОНИТЬ ----
-    elif action == "reject":
+    # ===== ОТКЛОНИТЬ =====
+    if action == "reject":
         context.user_data.pop(uid, None)
-        await query.edit_message_text("🚫 Транзакция отклонена.")
+        await safe_edit(query, "🚫 Транзакция отклонена.")
         return
 
-    # ---- ИЗМЕНИТЬ ----
-    elif action == "edit":
+    # ===== ИЗМЕНИТЬ =====
+    if action == "edit":
         context.user_data["edit_uid"] = uid
-        await query.edit_message_text(
+
+        await safe_edit(
+            query,
             "✏ <b>Редактирование</b>\n\n"
-            "Введите новые данные в формате:\n"
+            "Введите новые данные:\n"
             "<code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
@@ -115,18 +141,20 @@ async def receipt_callback(update, context):
 
 
 # ===============================================================
-# 3) РЕДАКТИРОВАНИЕ ПОЛЬЗОВАТЕЛЕМ
+# 3) ПОЛЬЗОВАТЕЛЬ РЕДАКТИРУЕТ ДАННЫЕ
 # ===============================================================
 async def receipt_edit_message(update, context):
     uid = context.user_data.get("edit_uid")
     if not uid:
-        return  # не в режиме редактирования
+        return
 
     text = update.message.text.strip()
     parts = [p.strip() for p in text.split(";")]
 
     if len(parts) != 3:
-        await update.message.reply_text("❌ Формат неверный.\nПример: 7000000; прочее; перевод")
+        await update.message.reply_text(
+            "❌ Формат неверный.\nПравильно:\n7000000; прочее; перевод"
+        )
         return
 
     amount_raw, category, description = parts
@@ -134,7 +162,7 @@ async def receipt_edit_message(update, context):
     try:
         amount = float(amount_raw)
     except:
-        await update.message.reply_text("❌ Ошибка суммы.")
+        await update.message.reply_text("❌ Сумма должна быть числом.")
         return
 
     data = context.user_data.get(uid)
@@ -147,14 +175,13 @@ async def receipt_edit_message(update, context):
     data["category"] = category
     data["description"] = description
 
-    # сохраняем
     save_transaction(update.message.from_user.id, data)
 
-    # удаляем временные данные
+    # очищаем временные данные
     context.user_data.pop(uid, None)
     context.user_data.pop("edit_uid", None)
 
-    await update.message.reply_text("✅ Транзакция обновлена и сохранена!")
+    await update.message.reply_text("✅ Транзакция успешно обновлена и сохранена!")
 
 
 # ===============================================================
