@@ -4,17 +4,18 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 
 from services.save_transaction import save_transaction
+from services.db import get_user_stats
 
 
 # ===============================================================
-# 1) Универсальная безопасная функция редактирования сообщений
+# 1) Универсальная безопасная функция редактирования
 # ===============================================================
 async def safe_edit(query, text, parse_mode=None):
     """
     Безопасно редактирует сообщение:
-      • сначала edit_message_text
-      • если сообщение — фото → edit_message_caption
-      • если не получилось → отправляет новое сообщение
+    • edit_message_text
+    • если сообщение — фото → edit_message_caption
+    • если не удалось → отправляет новое сообщение
     """
     try:
         await query.edit_message_text(text, parse_mode=parse_mode)
@@ -35,51 +36,67 @@ async def safe_edit(query, text, parse_mode=None):
 # 2) ОБРАБОТКА КНОПОК approve / reject / edit
 # ===============================================================
 async def receipt_callback(update, context):
-    """Обрабатывает кнопки: Одобрить / Отклонить / Изменить."""
+    """Обрабатывает кнопки Одобрить / Отклонить / Изменить."""
     query = update.callback_query
     await query.answer()
 
+    # Разбираем callback_data
     try:
         action, uid = query.data.split(":")
     except:
-        await safe_edit(query, "❌ Ошибка callback данных.")
+        await safe_edit(query, "❌ Ошибка callback.")
         return
 
+    # Достаём данные
     data = context.user_data.get(uid)
     if not data:
         await safe_edit(query, "❌ Данные транзакции устарели или были удалены.")
         return
 
-    # -----------------------------------------
-    # ОДОБРИТЬ
-    # -----------------------------------------
+    # ===============================================================
+    # ОДОБРИТЬ ТРАНЗАКЦИЮ
+    # ===============================================================
     if action == "approve":
+
+        # сохраняем транзакцию
         save_transaction(
             user_id=query.from_user.id,
-            data={
-                "type": "expense",
-                "amount": data["amount"],
-                "category": data["category"],
-                "description": data["description"],
-                "date": data.get("date")
-            }
+            amount=data["amount"],
+            category=data["category"],
+            tx_type="expense",
+            description=data["description"],
+            date=data.get("date")
         )
+
+        # удаляем временные данные
         context.user_data.pop(uid, None)
 
-        await safe_edit(query, "✅ Транзакция успешно сохранена!")
+        # получаем статистику пользователя
+        stats = get_user_stats(query.from_user.id)
+
+        text = (
+            "✅ Обработка завершена\n\n"
+            f"💸 Расходы: {stats['expense']:,} UZS\n"
+            f"💰 Доходы: {stats['income']:,} UZS\n"
+            f"🧾 Транзакции: {stats['count']}\n"
+            f"💼 Баланс: {stats['balance']:,} UZS\n\n"
+            "💰 *Посмотреть баланс*"
+        )
+
+        await safe_edit(query, text, parse_mode="Markdown")
         return
 
-    # -----------------------------------------
-    # ОТКЛОНИТЬ
-    # -----------------------------------------
+    # ===============================================================
+    # ОТКЛОНИТЬ ТРАНЗАКЦИЮ
+    # ===============================================================
     if action == "reject":
         context.user_data.pop(uid, None)
         await safe_edit(query, "🚫 Транзакция отменена.")
         return
 
-    # -----------------------------------------
-    # ИЗМЕНИТЬ
-    # -----------------------------------------
+    # ===============================================================
+    # РЕДАКТИРОВАТЬ ТРАНЗАКЦИЮ
+    # ===============================================================
     if action == "edit":
         context.user_data["edit_uid"] = uid
 
@@ -94,28 +111,27 @@ async def receipt_callback(update, context):
 
 
 # ===============================================================
-# 3) ПОЛЬЗОВАТЕЛЬ ОТПРАВЛЯЕТ ОТРЕДАКТИРОВАННУЮ СТРОКУ
+# 3) ПОЛЬЗОВАТЕЛЬ ВВОДИТ ИСПРАВЛЁННЫЕ ДАННЫЕ
 # ===============================================================
 async def receipt_edit_message(update, context):
     uid = context.user_data.get("edit_uid")
     if not uid:
-        return  # пользователь не в режиме редактирования
+        return
 
     text = update.message.text.strip()
     parts = [p.strip() for p in text.split(";")]
 
-    # Проверяем формат
     if len(parts) != 3:
         await update.message.reply_text(
             "❌ Неверный формат!\n"
-            "Правильно: <code>7000000; прочее; перевод</code>",
+            "Используйте: <code>7000000; прочее; перевод</code>",
             parse_mode="HTML"
         )
         return
 
     amount_raw, category, description = parts
 
-    # валидируем сумму
+    # проверяем сумму
     try:
         amount = float(amount_raw)
     except:
@@ -127,7 +143,7 @@ async def receipt_edit_message(update, context):
         await update.message.reply_text("❌ Ошибка: данные не найдены.")
         return
 
-    # обновляем данные
+    # обновление данных
     data["amount"] = amount
     data["category"] = category
     data["description"] = description
@@ -135,7 +151,7 @@ async def receipt_edit_message(update, context):
     # сохраняем
     save_transaction(update.message.from_user.id, data)
 
-    # очищаем временные данные
+    # чистим
     context.user_data.pop(uid, None)
     context.user_data.pop("edit_uid", None)
 
@@ -143,7 +159,7 @@ async def receipt_edit_message(update, context):
 
 
 # ===============================================================
-# 4) РЕГИСТРАЦИЯ ХЕНДЛЕРОВ
+# 4) РЕГИСТРАЦИЯ ХЕНДЛЕРА
 # ===============================================================
 def receipt_handler_register(app):
     app.add_handler(CallbackQueryHandler(receipt_callback))
