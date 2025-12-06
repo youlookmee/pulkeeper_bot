@@ -2,23 +2,26 @@
 import uuid
 import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import MessageHandler, filters
+from telegram.ext import MessageHandler, CallbackQueryHandler, filters
+
 from utils.ocr import extract_from_image
+from services.save_transaction import save_transaction
 
 
+# ===============================================================
+# 1) ОБРАБОТКА ФОТО
+# ===============================================================
 async def photo_handler(update, context):
-    """Обрабатывает фото чека — отправляет карточку с кнопками Одобрить/Отклонить/Изменить"""
+    """Обрабатывает фото → OCR → карточка с кнопками."""
     message = update.message
-    if not message.photo:
-        return
-
     photo = message.photo[-1]
-    file = await photo.get_file()
-    image_bytes = await file.download_as_bytearray()
 
     await message.reply_text("📄 Распознаю чек через AI...")
 
-    # вызываем OCR (может быть долгим)
+    file = await photo.get_file()
+    image_bytes = await file.download_as_bytearray()
+
+    # долгое OCR — выносим в executor
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, extract_from_image, bytes(image_bytes))
 
@@ -26,112 +29,137 @@ async def photo_handler(update, context):
         await message.reply_text("❌ Не удалось прочитать чек.")
         return
 
-     # уникальный ключ для хранения данных в user_data
+    # Uid для данных
     uid = str(uuid.uuid4())
-    # храним под uid
     context.user_data[uid] = data
 
-    # Формируем текст карточки
-    text = (
-        "🆕 Новая транзакция\n\n"
-        f"💸 Сумма: {int(data['amount']) if float(data['amount']).is_integer() else data['amount']} UZS\n"
-        f"📂 Категория: {data.get('category', 'прочее')}\n"
-        f"📝 Описание: {data.get('description','')}\n"
-        f"📅 Дата: {data.get('date','')}\n"
+    # Текст карточки
+    amount = data["amount"]
+    amount_txt = int(amount) if float(amount).is_integer() else amount
+
+    caption = (
+        "🧾 *Новая транзакция*\n\n"
+        f"💸 *Сумма:* {amount_txt:,} UZS\n"
+        f"🏷 *Категория:* {data['category']}\n"
+        f"📝 *Описание:* {data['description']}\n"
+        f"📅 *Дата:* {data.get('date', '')}\n"
     )
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{uid}"),
-         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{uid}")],
-        [InlineKeyboardButton("✏️ Изменить", callback_data=f"edit:{uid}")]
+        [
+            InlineKeyboardButton("✅ Одобрить", callback_data=f"approve:{uid}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{uid}")
+        ],
+        [InlineKeyboardButton("✏ Изменить", callback_data=f"edit:{uid}")]
     ])
 
     await message.reply_photo(
-        photo=await photo.get_file().download_as_bytearray(),  # просто повторно отправим ту же картинку
-        caption=text,
+        photo=image_bytes,
+        caption=caption,
+        parse_mode="Markdown",
         reply_markup=keyboard
     )
 
+
+# ===============================================================
+# 2) ОБРАБОТКА КНОПОК
+# ===============================================================
 async def receipt_callback(update, context):
-    """Обрабатывает кнопки: Одобрить / Отклонить / Изменить"""
+    """Одобрить / Отклонить / Изменить."""
     query = update.callback_query
     await query.answer()
 
-    data = context.user_data.get("pending_receipt")
+    raw = query.data.split(":")
+    action, uid = raw[0], raw[1]
 
+    data = context.user_data.get(uid)
     if not data:
-        await query.edit_message_text("❌ Ошибка: данные транзакции не найдены.")
+        await query.edit_message_text("❌ Ошибка: данные не найдены.")
         return
 
-    action = query.data
-
-    # --- ОДОБРЯЕМ ---
-    if action == "receipt_approve":
+    # ---- ОДОБРИТЬ ----
+    if action == "approve":
         save_transaction(
             user_id=query.from_user.id,
-            data=data
+            data={
+                "type": "expense",
+                "amount": data["amount"],
+                "category": data["category"],
+                "description": data["description"],
+                "date": data.get("date")
+            }
         )
-        await query.edit_message_text("✅ Транзакция успешно добавлена!")
-        context.user_data.pop("pending_receipt", None)
+        context.user_data.pop(uid, None)
+        await query.edit_message_text("✅ Транзакция успешно сохранена!")
         return
 
-    # --- ОТКЛОНЯЕМ ---
-    elif action == "receipt_decline":
-        await query.edit_message_text("❌ Транзакция отменена.")
-        context.user_data.pop("pending_receipt", None)
+    # ---- ОТКЛОНИТЬ ----
+    elif action == "reject":
+        context.user_data.pop(uid, None)
+        await query.edit_message_text("🚫 Транзакция отклонена.")
         return
 
-    # --- ИЗМЕНИТЬ ---
-    elif action == "receipt_edit":
-        context.user_data["edit_mode"] = True
+    # ---- ИЗМЕНИТЬ ----
+    elif action == "edit":
+        context.user_data["edit_uid"] = uid
 
-        text = (
-            "✏ <b>Редактирование транзакции</b>\n\n"
+        await query.edit_message_text(
+            "✏ <b>Редактирование</b>\n\n"
             "Отправьте данные в формате:\n"
             "<code>сумма; категория; описание</code>\n\n"
-            "Например:\n"
-            "<code>7000000; прочее; перевод</code>"
+            "Пример:\n<code>7000000; прочее; перевод</code>",
+            parse_mode="HTML"
         )
-
-        await query.edit_message_text(text, parse_mode="HTML")
         return
 
 
+# ===============================================================
+# 3) ПОЛЬЗОВАТЕЛЬ ВВОДИТ ИЗМЕНЁННЫЕ ДАННЫЕ
+# ===============================================================
 async def receipt_edit_message(update, context):
-    """Пользователь вручную отправил исправленные данные."""
-    if not context.user_data.get("edit_mode"):
-        return  # не редактируем
+    """Получает сообщение с исправленными данными."""
+    uid = context.user_data.get("edit_uid")
+    if not uid:
+        return
 
-    text = update.message.text
+    text = update.message.text.strip()
     parts = [p.strip() for p in text.split(";")]
 
     if len(parts) != 3:
-        await update.message.reply_text("❌ Формат неверный. Пример:\n7000000; прочее; перевод")
+        await update.message.reply_text("❌ Формат неверный.\nПравильно: 7000000; прочее; перевод")
         return
 
     amount, category, description = parts
-    data = context.user_data.get("pending_receipt")
 
-    # Обновляем данные
     try:
-        data["amount"] = float(amount)
-        data["category"] = category
-        data["description"] = description
+        amount = float(amount)
     except:
-        await update.message.reply_text("❌ Ошибка. Проверьте данные.")
+        await update.message.reply_text("❌ Ошибка суммы.")
         return
 
-    # Сохраняем
+    data = context.user_data.get(uid)
+    if not data:
+        await update.message.reply_text("❌ Ошибка данных.")
+        return
+
+    # обновляем
+    data["amount"] = amount
+    data["category"] = category
+    data["description"] = description
+
+    # сохраняем в БД
     save_transaction(update.message.from_user.id, data)
 
-    await update.message.reply_text("✅ Транзакция обновлена и сохранена!")
+    # чистим временные данные
+    context.user_data.pop(uid, None)
+    context.user_data.pop("edit_uid", None)
 
-    # очищаем
-    context.user_data.pop("edit_mode", None)
-    context.user_data.pop("pending_receipt", None)
+    await update.message.reply_text("✅ Транзакция успешно обновлена и сохранена!")
 
 
-# Регистрируем хендлеры
+# ===============================================================
+# 4) ЭКСПОРТ ХЕНДЛЕРОВ ДЛЯ BOT.PY
+# ===============================================================
 photo_handler = MessageHandler(filters.PHOTO, photo_handler)
 receipt_callback_handler = CallbackQueryHandler(receipt_callback)
-receipt_edit_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), receipt_edit_message)
+receipt_edit_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_edit_message)
