@@ -1,42 +1,38 @@
 # handlers/receipt_handler.py
-import uuid
 import asyncio
+import uuid
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler
+from telegram.ext import CallbackQueryHandler, MessageHandler, filters
+
 from services.save_transaction import save_transaction
 
 
-# Хранилище временных данных по UID
+# Хранилище данных по UID (если нет Redis)
 TEMP_RECEIPTS = {}
 
 
-# ==========================
-#   ПОКАЗ КАРТОЧКИ ПОСЛЕ OCR
-# ==========================
+# ===============================================================
+#   1) ПОКАЗ КАРТОЧКИ ПОСЛЕ OCR  (если надо вызвать отдельно)
+# ===============================================================
 async def show_receipt_card(update, context):
-    """
-    Показывает карточку с данными чека + кнопки.
-    Вызывается из photo_handler после OCR.
-    """
+    """Показывает UI-карточку транзакции (используется при необходимости)."""
 
     data = context.user_data.get("receipt_data")
     message = update.message
 
     if not data:
-        await message.reply_text("❌ Ошибка: данные распознавания не найдены.")
+        await message.reply_text("❌ Ошибка: данные чека не найдены.")
         return
 
-    # Генерируем уникальный ID транзакции
     uid = str(uuid.uuid4())
     TEMP_RECEIPTS[uid] = data
 
-    text = (
+    caption = (
         "🧾 *Новая транзакция*\n\n"
         f"💸 *Сумма:* {data['amount']:,} UZS\n"
         f"🏷 *Категория:* {data['category']}\n"
         f"📝 *Описание:* {data['description']}\n"
-        f"📅 *Дата:* {data.get('date', '—')}\n\n"
-        "Выберите действие:"
+        f"📅 *Дата:* {data.get('date', '')}\n"
     )
 
     keyboard = InlineKeyboardMarkup([
@@ -49,32 +45,29 @@ async def show_receipt_card(update, context):
         ]
     ])
 
-    await message.reply_markdown(text, reply_markup=keyboard)
+    await message.reply_markdown(caption, reply_markup=keyboard)
 
 
-# ==========================
-#   ОБРАБОТКА КНОПОК
-# ==========================
+# ===============================================================
+#   2) ОБРАБОТКА КНОПОК: approve / reject / edit
+# ===============================================================
 async def receipt_callback(update, context):
-    """Обработка кнопок: Одобрить / Отклонить / Изменить."""
+    """Обрабатывает кнопки."""
     query = update.callback_query
     await query.answer()
 
-    # callback_data = "<action>:<uid>"
     try:
         action, uid = query.data.split(":")
     except:
-        await query.edit_message_text("❌ Некорректные данные callback.")
+        await query.edit_message_text("❌ Ошибка данных кнопки.")
         return
 
     data = TEMP_RECEIPTS.get(uid)
     if not data:
-        await query.edit_message_text("❌ Данные транзакции не найдены (возможно устарели).")
+        await query.edit_message_text("❌ Данные транзакции не найдены.")
         return
 
-    # ==============
-    #  ОДОБРИТЬ
-    # ==============
+    # ✔ ОДОБРЕНИЕ
     if action == "approve":
         loop = asyncio.get_running_loop()
 
@@ -91,33 +84,78 @@ async def receipt_callback(update, context):
             }
         )
 
-        await query.edit_message_text("✅ Транзакция *успешно сохранена!*")
         TEMP_RECEIPTS.pop(uid, None)
+        await query.edit_message_text("✅ Транзакция успешно сохранена!")
         return
 
-    # ==============
-    #  ОТКЛОНИТЬ
-    # ==============
+    # ❌ ОТКЛОНЕНИЕ
     elif action == "reject":
-        await query.edit_message_text("🚫 Транзакция *отклонена*.")
         TEMP_RECEIPTS.pop(uid, None)
+        await query.edit_message_text("🚫 Транзакция отклонена.")
         return
 
-    # ==============
-    #  ИЗМЕНИТЬ
-    # ==============
+    # ✏ РЕДАКТИРОВАНИЕ
     elif action == "edit":
         context.user_data["edit_uid"] = uid
+
         await query.edit_message_text(
-            "✏ *Редактирование*\n\n"
-            "Пришлите новую сумму и описание в формате:\n"
-            "`50000 такси`\n\n"
-            "Или отмените командой /cancel",
-            parse_mode="Markdown"
+            "✏ <b>Редактирование</b>\n\n"
+            "Отправьте исправленные данные в формате:\n"
+            "<code>7000000; прочее; перевод</code>",
+            parse_mode="HTML"
         )
         return
 
 
-# Регистрируем обработчик
-def receipt_handler_register(app):
-    app.add_handler(CallbackQueryHandler(receipt_callback))
+# ===============================================================
+#   3) ПРИЁМ НОВЫХ ДАННЫХ ОТ ПОЛЬЗОВАТЕЛЯ
+# ===============================================================
+async def receipt_edit_message(update, context):
+    """Обрабатывает сообщение вида: 7000000; категория; описание"""
+
+    uid = context.user_data.get("edit_uid")
+    if not uid:
+        return  # пользователь писал не в режиме редактирования
+
+    text = update.message.text.strip()
+    parts = [p.strip() for p in text.split(";")]
+
+    if len(parts) != 3:
+        await update.message.reply_text(
+            "❌ Неверный формат.\nПример:\n<code>7000000; прочее; перевод</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    amount, category, description = parts
+
+    try:
+        amount = float(amount)
+    except:
+        await update.message.reply_text("❌ Сумма должна быть числом.")
+        return
+
+    data = TEMP_RECEIPTS.get(uid)
+    if not data:
+        await update.message.reply_text("❌ Данные транзакции не найдены.")
+        return
+
+    # Обновляем
+    data["amount"] = amount
+    data["category"] = category
+    data["description"] = description
+
+    # Сохраняем
+    save_transaction(update.message.from_user.id, data)
+
+    TEMP_RECEIPTS.pop(uid, None)
+    context.user_data.pop("edit_uid", None)
+
+    await update.message.reply_text("✅ Транзакция обновлена и сохранена!")
+
+
+# ===============================================================
+#   4) РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ДЛЯ BOT.PY
+# ===============================================================
+receipt_callback_handler = CallbackQueryHandler(receipt_callback)
+receipt_edit_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_edit_message)
